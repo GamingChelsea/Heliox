@@ -5,3 +5,5 @@ edition = "2024"
 
 [dependencies]
 gpui-kit = { git = "https://github.com/gpui-ce/gpui-component", package = "gpui_ce_kit" }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

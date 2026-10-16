@@ -1,59 +1,43 @@
 use crate::router::{NavigationHistory, NavigationRoute};
+use crate::ui::components::sidebar::AppSidebar;
+use gpui_kit::assets::AllAssets;
+use gpui_kit::component::label::Label;
 use gpui_kit::component::*;
-use gpui_kit::component::{button::*, label::Label};
 use gpui_kit::*;
 use std::path::PathBuf;
 
-mod router;
+pub mod router;
+pub mod ui;
 
 pub struct MusicApp {
-    nav_history: Entity<NavigationHistory>,
+    sidebar: Entity<AppSidebar>,
 }
+
 impl MusicApp {
-    pub fn new(nav_history: Entity<NavigationHistory>, cx: &mut Context<Self>) -> Self {
-        cx.observe(&nav_history, |_this, _entity, cx| {
+    pub fn new(cx: &mut Context<Self>) -> Self {
+        cx.observe_global::<NavigationHistory>(|_this, cx| {
             cx.notify();
         })
         .detach();
 
-        Self { nav_history }
+        let sidebar = cx.new(|cx| AppSidebar::new(cx));
+
+        Self { sidebar }
     }
 }
 
 impl Render for MusicApp {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let current_route = self.nav_history.read(cx).current_route().clone();
+        let current_route = cx.global::<NavigationHistory>().current_route().clone();
 
         div()
-            .v_flex()
-            .gap_2()
-            .size_full()
-            .items_center()
-            .justify_center()
-            .child("Hello, World!")
-            .child(match current_route {
+            .flex()
+            .w_full()
+            .h_full()
+            .child(self.sidebar.clone())
+            .child(div().flex_1().p_5().child(match current_route {
                 NavigationRoute::Home => Label::new("Home"),
                 NavigationRoute::TestPage { message } => Label::new(message),
-            })
-            .child(Button::new("Home").child("Home").on_click({
-                let nav = self.nav_history.clone();
-                move |_event, _window, app| {
-                    nav.update(app, |history, cx| {
-                        history.push(NavigationRoute::Home);
-                        cx.notify();
-                    });
-                }
-            }))
-            .child(Button::new("TestPage").child("Test Page").on_click({
-                let nav = self.nav_history.clone();
-                move |_event, _window, app| {
-                    nav.update(app, |history, cx| {
-                        history.push(NavigationRoute::TestPage {
-                            message: "hello from this menu".into(),
-                        });
-                        cx.notify();
-                    });
-                }
             }))
     }
 }
@@ -61,38 +45,40 @@ impl Render for MusicApp {
 fn main() {
     tracing_subscriber::fmt::init();
 
-    gpui_kit::application().run(move |cx| {
-        gpui_kit::init(cx);
+    gpui_kit::application()
+        .with_assets(AllAssets)
+        .run(move |cx| {
+            gpui_kit::init(cx);
 
-        gpui_kit::open_window(
-            WindowOptions {
-                titlebar: Some(TitlebarOptions {
-                    appears_transparent: true,
+            cx.set_global(NavigationHistory::new(NavigationRoute::Home));
+
+            gpui_kit::open_window(
+                WindowOptions {
+                    titlebar: Some(TitlebarOptions {
+                        appears_transparent: false,
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
-                ..Default::default()
-            },
-            cx,
-            |_, cx| {
-                // Theme
-                let theme_name = SharedString::from("Default Dark");
-                if let Err(err) =
-                    ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
-                        if let Some(theme) =
-                            ThemeRegistry::global(cx).themes().get(&theme_name).cloned()
-                        {
-                            Theme::update(cx, |current| current.apply_config(&theme));
-                        }
-                    })
-                {
-                    tracing::error!(?err, "Failed to watch themes directory")
-                }
+                },
+                cx,
+                |_, cx| {
+                    // Theme
+                    let theme_name = SharedString::from("Default Dark");
+                    if let Err(err) =
+                        ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
+                            if let Some(theme) =
+                                ThemeRegistry::global(cx).themes().get(&theme_name).cloned()
+                            {
+                                Theme::update(cx, |current| current.apply_config(&theme));
+                            }
+                        })
+                    {
+                        tracing::error!(?err, "Failed to watch themes directory")
+                    }
 
-                let nav_history = cx.new(|_| NavigationHistory::new(NavigationRoute::Home));
-
-                cx.new(|cx| MusicApp::new(nav_history, cx))
-            },
-        )
-        .expect("Failed to open window");
-    });
+                    cx.new(|cx| MusicApp::new(cx))
+                },
+            )
+            .expect("Failed to open window");
+        });
 }

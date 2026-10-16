@@ -1,3 +1,4 @@
+use gpui_kit::Global;
 use std::collections::VecDeque;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -56,3 +57,5 @@ impl NavigationHistory {
         }
     }
 }
+
+impl Global for NavigationHistory {}

@@ -1,5 +1,6 @@
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::ui::components::sidebar::AppSidebar;
+use crate::ui::pages::settings_page::SettingsPage;
 use gpui_kit::assets::AllAssets;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::*;
@@ -20,7 +21,7 @@ impl MusicApp {
         })
         .detach();
 
-        let sidebar = cx.new(|cx| AppSidebar::new(cx));
+        let sidebar = cx.new(AppSidebar::new);
 
         Self { sidebar }
     }
@@ -35,10 +36,21 @@ impl Render for MusicApp {
             .w_full()
             .h_full()
             .child(self.sidebar.clone())
-            .child(div().flex_1().p_5().child(match current_route {
-                NavigationRoute::Home => Label::new("Home"),
-                NavigationRoute::TestPage { message } => Label::new(message),
-            }))
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .h_full()
+                    .items_center()
+                    .justify_center()
+                    .child(match current_route {
+                        NavigationRoute::Home => Label::new("Home").into_any_element(),
+                        NavigationRoute::TestPage { message } => {
+                            Label::new(message).into_any_element()
+                        }
+                        NavigationRoute::Settings => SettingsPage::new().into_any_element(),
+                    }),
+            )
     }
 }
 
@@ -76,7 +88,7 @@ fn main() {
                         tracing::error!(?err, "Failed to watch themes directory")
                     }
 
-                    cx.new(|cx| MusicApp::new(cx))
+                    cx.new(MusicApp::new)
                 },
             )
             .expect("Failed to open window");

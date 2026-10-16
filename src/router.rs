@@ -5,6 +5,7 @@ use std::collections::VecDeque;
 pub enum NavigationRoute {
     Home,
     TestPage { message: String },
+    Settings,
 }
 
 #[derive(Debug)]
@@ -17,7 +18,7 @@ impl NavigationHistory {
     pub fn new(current: NavigationRoute) -> Self {
         Self {
             history: VecDeque::new(),
-            current: current,
+            current,
             future: VecDeque::new(),
         }
     }

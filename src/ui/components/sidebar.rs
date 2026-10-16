@@ -11,7 +11,6 @@ use gpui_kit::*;
 pub struct AppSidebar {
     collapsed: bool,
 }
-
 impl AppSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self { collapsed: false }
@@ -35,7 +34,7 @@ impl Render for AppSidebar {
                 SidebarHeader::new().child(
                     h_flex()
                         .gap_2()
-                        .child(Icon::new(IconName::Folder))
+                        .child(Icon::new(IconName::Music))
                         .when(!self.collapsed, |this| this.child("Music Player")),
                 ),
             )
@@ -67,7 +66,11 @@ impl Render for AppSidebar {
                         .child(
                             SidebarMenuItem::new("Settings")
                                 .icon(IconName::Settings)
-                                .on_click(|_, _, _| println!("Settings clicked")),
+                                .on_click(|_event, _window, cx| {
+                                    cx.update_global::<NavigationHistory, _>(|history, _cx| {
+                                        history.push(NavigationRoute::Settings);
+                                    });
+                                }),
                         ),
                 ),
             )

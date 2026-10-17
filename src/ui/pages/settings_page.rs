@@ -1,7 +1,7 @@
 use gpui_kit::component::setting::{
     SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
-use gpui_kit::component::{ActiveTheme, Theme, ThemeConfig, ThemeRegistry};
+use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry};
 use gpui_kit::*;
 
 use crate::model::Config;

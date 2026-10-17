@@ -14,8 +14,13 @@ pub mod model;
 pub mod router;
 pub mod ui;
 
+actions!(nav, [GoBack, GoForward]);
+actions!(cmd, [OpenCommandField]);
+actions!(sidebar, [ToggleSidebar]);
+
 pub struct MusicApp {
     sidebar: Entity<AppSidebar>,
+    focus_handle: FocusHandle,
 }
 
 impl MusicApp {
@@ -26,20 +31,52 @@ impl MusicApp {
         .detach();
 
         let sidebar = cx.new(AppSidebar::new);
+        let focus_handle = cx.focus_handle();
 
-        Self { sidebar }
+        Self {
+            sidebar,
+            focus_handle,
+        }
     }
 }
 
 impl Render for MusicApp {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let current_route = cx.global::<NavigationHistory>().current_route().clone();
 
         div()
-            .flex()
+            .track_focus(&self.focus_handle)
+            // Nav with Mouse Buttons
+            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
+                window.focus(&this.focus_handle, cx);
+                match event.button {
+                    MouseButton::Navigate(NavigationDirection::Back) => {
+                        cx.update_global::<NavigationHistory, _>(|history, _cx| history.go_back());
+                        cx.stop_propagation();
+                    }
+                    MouseButton::Navigate(NavigationDirection::Forward) => {
+                        cx.update_global::<NavigationHistory, _>(|history, _cx| {
+                            history.go_forward()
+                        });
+                        cx.stop_propagation();
+                    }
+                    _ => {}
+                }
+            }))
+            // Key Bindings Handler
+            .on_action(cx.listener(|_this, _action: &GoBack, _window, cx| {
+                cx.update_global::<NavigationHistory, _>(|history, _cx| history.go_back());
+            }))
+            .on_action(cx.listener(|_this, _action: &GoForward, _window, cx| {
+                cx.update_global::<NavigationHistory, _>(|history, _cx| history.go_forward());
+            }))
+            .on_action(cx.listener(|this, _action: &ToggleSidebar, _window, cx| {
+                this.sidebar.update(cx, |sidebar, cx| {
+                    sidebar.toggle(cx);
+                });
+            }))
             .v_flex()
-            .w_full()
-            .h_full()
+            .size_full()
             .child(TitleBar::new().child("Music Player"))
             .child(
                 div()
@@ -74,6 +111,13 @@ fn main() {
         .run(move |cx| {
             gpui_kit::init(cx);
 
+            cx.bind_keys([
+                KeyBinding::new("alt-left", GoBack, None),
+                KeyBinding::new("alt-right", GoForward, None),
+                KeyBinding::new("ctrl-b", ToggleSidebar, None),
+                KeyBinding::new("cmd-b", ToggleSidebar, None),
+            ]);
+
             cx.set_global(NavigationHistory::new(NavigationRoute::Home));
             init_config(cx);
 
@@ -100,7 +144,7 @@ fn main() {
                     ..Default::default()
                 },
                 cx,
-                |_, cx| {
+                |window, cx| {
                     // Theme
                     let config = load_config();
                     if let Err(err) =
@@ -117,7 +161,10 @@ fn main() {
                         tracing::error!(?err, "Failed to watch themes directory")
                     }
 
-                    cx.new(MusicApp::new)
+                    let app = cx.new(MusicApp::new);
+                    let focus_handle = app.read(cx).focus_handle.clone();
+                    window.focus(&focus_handle, cx);
+                    app
                 },
             )
             .expect("Failed to open window");

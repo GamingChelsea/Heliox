@@ -15,6 +15,11 @@ impl AppSidebar {
     pub fn new(_cx: &mut Context<Self>) -> Self {
         Self { collapsed: false }
     }
+
+    pub fn toggle(&mut self, cx: &mut Context<Self>) {
+        self.collapsed = !self.collapsed;
+        cx.notify();
+    }
 }
 
 impl Render for AppSidebar {
@@ -30,6 +35,7 @@ impl Render for AppSidebar {
         Sidebar::new("app-sidebar")
             .collapsed(self.collapsed)
             .collapsible(true)
+            .when(!self.collapsed, |this| this.w_40())
             .header(
                 SidebarHeader::new().child(
                     h_flex()
@@ -66,6 +72,7 @@ impl Render for AppSidebar {
                         .child(
                             SidebarMenuItem::new("Settings")
                                 .icon(IconName::Settings)
+                                .active(matches!(current_route, NavigationRoute::Settings))
                                 .on_click(|_event, _window, cx| {
                                     cx.update_global::<NavigationHistory, _>(|history, _cx| {
                                         history.push(NavigationRoute::Settings);
@@ -81,8 +88,7 @@ impl Render for AppSidebar {
                         .w_full()
                         .gap_2()
                         .on_click(cx.listener(|this, _event, _window, cx| {
-                            this.collapsed = !this.collapsed;
-                            cx.notify();
+                            this.toggle(cx);
                         }))
                         .child(Icon::new(toggle_icon))
                         .when(!self.collapsed, |this| this.child("Collapse")),

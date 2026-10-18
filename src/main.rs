@@ -1,5 +1,6 @@
 use crate::model::Config;
 use crate::router::{NavigationHistory, NavigationRoute};
+use crate::ui::components::command_palette;
 use crate::ui::components::sidebar::AppSidebar;
 use crate::ui::pages::settings_page::SettingsPage;
 use gpui_kit::assets::AllAssets;
@@ -75,6 +76,11 @@ impl Render for MusicApp {
                     sidebar.toggle(cx);
                 });
             }))
+            .on_action(
+                cx.listener(|_this, _action: &OpenCommandField, window, cx| {
+                    command_palette::open(window, cx);
+                }),
+            )
             .v_flex()
             .size_full()
             .child(TitleBar::new().child("Music Player"))
@@ -116,6 +122,10 @@ fn main() {
                 KeyBinding::new("alt-right", GoForward, None),
                 KeyBinding::new("ctrl-b", ToggleSidebar, None),
                 KeyBinding::new("cmd-b", ToggleSidebar, None),
+                KeyBinding::new("ctrl-p", OpenCommandField, None),
+                KeyBinding::new("ctrl-shift-p", OpenCommandField, None),
+                KeyBinding::new("cmd-p", OpenCommandField, None),
+                KeyBinding::new("cmd-shift-p", OpenCommandField, None),
             ]);
 
             cx.set_global(NavigationHistory::new(NavigationRoute::Home));

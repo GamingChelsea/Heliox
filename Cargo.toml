@@ -8,5 +8,9 @@ dirs = "7.0.0"
 gpui-kit = { git = "https://github.com/gpui-ce/gpui-component", package = "gpui_ce_kit" }
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
+strum = { version = "0.28.0", features = ["derive"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[profile.dev]
+debug = 2

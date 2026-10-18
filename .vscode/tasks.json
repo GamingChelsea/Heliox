@@ -1,0 +1,35 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "cargo build",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "build",
+                "--bin",
+                "rust-music-player"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "build"
+        },
+        {
+            "label": "cargo build release",
+            "type": "shell",
+            "command": "cargo",
+            "args": [
+                "build",
+                "--release",
+                "--bin",
+                "rust-music-player"
+            ],
+            "problemMatcher": [
+                "$rustc"
+            ],
+            "group": "build"
+        }
+    ]
+}
+

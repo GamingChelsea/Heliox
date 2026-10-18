@@ -47,14 +47,23 @@ impl Render for AppSidebar {
             .child(
                 SidebarGroup::new("Navigation").child(
                     SidebarMenu::new()
-                        .child(
-                            SidebarMenuItem::new("Home")
-                                .icon(IconName::House)
-                                .active(matches!(current_route, NavigationRoute::Home))
-                                .on_click(|_event, _window, cx| {
-                                    cx.update_global::<NavigationHistory, _>(|history, _cx| {
-                                        history.push(NavigationRoute::Home);
-                                    });
+                        .children(
+                            NavigationRoute::get_clean_routes()
+                                .into_iter()
+                                .map(|route| {
+                                    let meta = route.meta();
+                                    let is_current = current_route == route;
+                                    SidebarMenuItem::new(meta.name)
+                                        .icon(meta.icon)
+                                        .active(is_current)
+                                        .on_click(move |_event, _window, cx| {
+                                            let route = route.clone();
+                                            cx.update_global::<NavigationHistory, _>(
+                                                move |history, _cx| {
+                                                    history.push(route.clone());
+                                                },
+                                            );
+                                        })
                                 }),
                         )
                         .child(
@@ -66,16 +75,6 @@ impl Render for AppSidebar {
                                         history.push(NavigationRoute::TestPage {
                                             message: "hello from sidebar".into(),
                                         });
-                                    });
-                                }),
-                        )
-                        .child(
-                            SidebarMenuItem::new("Settings")
-                                .icon(IconName::Settings)
-                                .active(matches!(current_route, NavigationRoute::Settings))
-                                .on_click(|_event, _window, cx| {
-                                    cx.update_global::<NavigationHistory, _>(|history, _cx| {
-                                        history.push(NavigationRoute::Settings);
                                     });
                                 }),
                         ),

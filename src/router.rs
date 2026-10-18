@@ -1,11 +1,45 @@
-use gpui_kit::Global;
+use gpui_kit::{Global, assets::IconName};
 use std::collections::VecDeque;
+use strum::{EnumIter, IntoEnumIterator};
 
-#[derive(Clone, PartialEq, Debug)]
+#[derive(Clone, Copy, Debug)]
+pub struct RouteMeta {
+    pub name: &'static str,
+    pub icon: IconName,
+    pub no_input: bool,
+}
+
+#[derive(Clone, PartialEq, Debug, EnumIter)]
 pub enum NavigationRoute {
     Home,
     TestPage { message: String },
     Settings,
+}
+impl NavigationRoute {
+    // Get all routes which don't require a input
+    pub fn get_clean_routes() -> Vec<NavigationRoute> {
+        Self::iter().filter(|route| route.meta().no_input).collect()
+    }
+
+    pub const fn meta(&self) -> RouteMeta {
+        match self {
+            NavigationRoute::Home => RouteMeta {
+                name: "Home",
+                icon: IconName::House,
+                no_input: true,
+            },
+            NavigationRoute::TestPage { .. } => RouteMeta {
+                name: "Test Page",
+                icon: IconName::TestTube,
+                no_input: false,
+            },
+            NavigationRoute::Settings => RouteMeta {
+                name: "Settings",
+                icon: IconName::Settings,
+                no_input: true,
+            },
+        }
+    }
 }
 
 #[derive(Debug)]

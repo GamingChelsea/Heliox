@@ -1,0 +1,23 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug (MSVC Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/debug/rust-music-player.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cargo build"
+        },
+        {
+            "name": "Release (MSVC Windows)",
+            "type": "cppvsdbg",
+            "request": "launch",
+            "program": "${workspaceFolder}/target/release/rust-music-player.exe",
+            "args": [],
+            "cwd": "${workspaceFolder}",
+            "preLaunchTask": "cargo build release"
+        }
+    ]
+}

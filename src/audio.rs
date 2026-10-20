@@ -2,13 +2,13 @@ use std::{
     fs::File,
     num::NonZero,
     path::Path,
-    sync::{mpsc::Sender, LazyLock},
+    sync::{LazyLock, mpsc::Sender},
     time::Duration,
 };
 
 use rodio::Source;
 use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{CodecRegistry, Decoder, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::codecs::{CODEC_TYPE_NULL, CodecRegistry, Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
@@ -56,8 +56,8 @@ impl SymphoniaSource {
         };
         let metadata_opts = MetadataOptions::default();
 
-        let probed = symphonia::default::get_probe()
-            .format(&hint, mss, &format_opts, &metadata_opts)?;
+        let probed =
+            symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts)?;
 
         let reader = probed.format;
 
@@ -72,20 +72,16 @@ impl SymphoniaSource {
 
         let sample_rate = NonZero::new(codec_params.sample_rate.unwrap_or(44100))
             .unwrap_or(NonZero::new(44100).unwrap());
-        let channels = NonZero::new(
-            codec_params
-                .channels
-                .map(|c| c.count() as u16)
-                .unwrap_or(2),
-        )
-        .unwrap_or(NonZero::new(2).unwrap());
+        let channels = NonZero::new(codec_params.channels.map(|c| c.count() as u16).unwrap_or(2))
+            .unwrap_or(NonZero::new(2).unwrap());
 
-        let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, codec_params.time_base) {
-            let time = tb.calc_time(n_frames);
-            Some(Duration::from_secs(time.seconds) + Duration::from_secs_f64(time.frac))
-        } else {
-            None
-        };
+        let total_duration =
+            if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, codec_params.time_base) {
+                let time = tb.calc_time(n_frames);
+                Some(Duration::from_secs(time.seconds) + Duration::from_secs_f64(time.frac))
+            } else {
+                None
+            };
 
         let decoder_opts = DecoderOptions::default();
         let decoder = CODEC_REGISTRY.make(&codec_params, &decoder_opts)?;
@@ -199,28 +195,29 @@ pub fn init_audio() -> Sender<AudioCommand> {
 
         while let Ok(command) = receiver.recv() {
             match command {
-                AudioCommand::Play(path) => {
-                    match SymphoniaSource::new(&path) {
-                        Ok(source) => {
-                            let player = rodio::Player::connect_new(&sink_handle.mixer());
-                            player.append(source);
-                            current_player = Some(player);
-                        }
-                        Err(err) => {
-                            tracing::error!(?err, "Failed to load audio file with symphonia");
-                        }
+                AudioCommand::Play(path) => match SymphoniaSource::new(&path) {
+                    Ok(source) => {
+                        let player = rodio::Player::connect_new(&sink_handle.mixer());
+                        player.append(source);
+                        current_player = Some(player);
                     }
-                }
+                    Err(err) => {
+                        tracing::error!(?err, "Failed to load audio file with symphonia");
+                    }
+                },
                 AudioCommand::ResumePause => {
                     if let Some(ref player) = current_player {
                         if player.is_paused() {
                             player.play();
                         } else {
-                            player.stop();
+                            player.pause();
                         }
                     }
                 }
                 AudioCommand::Stop => {
+                    if let Some(ref player) = current_player {
+                        player.stop();
+                    }
                     current_player = None;
                 }
             }

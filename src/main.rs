@@ -1,4 +1,4 @@
-use crate::audio::init_audio;
+use crate::audio::{AudioCommand, init_audio};
 use crate::model::{AudioPlayer, Config, CurrentTrackList, Track, TrackListSource};
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::ui::components::command_palette;
@@ -29,6 +29,7 @@ pub mod ui;
 actions!(nav, [GoBack, GoForward]);
 actions!(cmd, [OpenCommandField]);
 actions!(sidebar, [ToggleSidebar]);
+actions!(playback, [ResumePause]);
 
 pub struct MusicApp {
     sidebar: Entity<AppSidebar>,
@@ -101,6 +102,8 @@ impl MusicApp {
                                                 }
                                                 if let Some(tag_album) = tag.album() {
                                                     album = tag_album.to_string();
+                                                } else {
+                                                    album = title.clone();
                                                 }
                                             }
                                         }
@@ -184,6 +187,11 @@ impl Render for MusicApp {
                     command_palette::open(window, cx);
                 }),
             )
+            .on_action(cx.listener(|_this, _action: &ResumePause, _window, cx| {
+                cx.update_global::<AudioPlayer, _>(|audio_player, _cx| {
+                    let _ = audio_player.0.send(AudioCommand::ResumePause);
+                })
+            }))
             .v_flex()
             .size_full()
             .child(TitleBar::new().child("Music Player"))
@@ -230,6 +238,7 @@ fn main() {
                 KeyBinding::new("ctrl-shift-p", OpenCommandField, None),
                 KeyBinding::new("cmd-p", OpenCommandField, None),
                 KeyBinding::new("cmd-shift-p", OpenCommandField, None),
+                KeyBinding::new("space", ResumePause, None),
             ]);
 
             cx.set_global(NavigationHistory::new(NavigationRoute::Home));

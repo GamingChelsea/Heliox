@@ -1,16 +1,24 @@
-use crate::model::Config;
+use crate::audio::init_audio;
+use crate::model::{AudioPlayer, Config, CurrentTrackList, Track};
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::ui::components::command_palette;
 use crate::ui::components::sidebar::AppSidebar;
+use crate::ui::pages::home_page::HomePage;
+use crate::ui::pages::local_library::LocalLibraryPage;
 use crate::ui::pages::settings_page::SettingsPage;
+use crate::ui::pages::test_page::TestPage;
 use gpui_kit::assets::AllAssets;
 use gpui_kit::component::TitleBar;
-use gpui_kit::component::label::Label;
 use gpui_kit::component::*;
 use gpui_kit::*;
+use lofty::file::{AudioFile, TaggedFileExt};
+use lofty::probe::Probe;
+use lofty::tag::Accessor;
 use std::fs::{self};
 use std::path::PathBuf;
+use xxhash_rust::xxh3::xxh3_64;
 
+pub mod audio;
 pub mod model;
 pub mod router;
 pub mod ui;
@@ -27,6 +35,81 @@ pub struct MusicApp {
 impl MusicApp {
     pub fn new(cx: &mut Context<Self>) -> Self {
         cx.observe_global::<NavigationHistory>(|_this, cx| {
+            let route = cx.global::<NavigationHistory>().current_route().clone();
+
+            match route {
+                NavigationRoute::LocalLibrary => {
+                    let music_dir = cx.global::<Config>().music_dir.clone();
+
+                    cx.spawn(async move |_this, cx| {
+                        let tracks = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let mut tracks = Vec::new();
+
+                                if let Ok(entries) = std::fs::read_dir(music_dir) {
+                                    for entry in entries.flatten() {
+                                        let path = entry.path();
+                                        let extension = path.extension();
+                                        if let Some(ext) = extension {
+                                            if ext.to_str() == Some("mp3") {
+                                                let id = xxh3_64(
+                                                    path.clone().to_string_lossy().as_bytes(),
+                                                );
+                                                let mut title = String::from("No  found");
+                                                let mut artist = String::from("No  found");
+                                                let mut album = String::from("Not found");
+                                                let mut duration_secs = 1;
+                                                if let Ok(tagged_file) =
+                                                    Probe::open(&path).and_then(|p| p.read())
+                                                {
+                                                    let properties = tagged_file.properties();
+                                                    duration_secs =
+                                                        properties.duration().as_secs() as u32;
+
+                                                    if let Some(tag) = tagged_file
+                                                        .primary_tag()
+                                                        .or_else(|| tagged_file.first_tag())
+                                                    {
+                                                        if let Some(tag_title) = tag.title() {
+                                                            title = tag_title.to_string();
+                                                        }
+                                                        if let Some(tag_artist) = tag.artist() {
+                                                            artist = tag_artist.to_string();
+                                                        }
+                                                        if let Some(tag_album) = tag.album() {
+                                                            album = tag_album.to_string();
+                                                        }
+                                                    }
+                                                }
+
+                                                tracks.push(Track {
+                                                    id,
+                                                    title,
+                                                    artist,
+                                                    album,
+                                                    duration_secs,
+                                                    path,
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+
+                                tracks
+                            })
+                            .await;
+
+                        let _ = cx.update(|cx| {
+                            cx.update_global::<CurrentTrackList, _>(|list, _cx| {
+                                list.tracks = Some(tracks);
+                            });
+                        });
+                    })
+                    .detach();
+                }
+                _ => {}
+            }
             cx.notify();
         })
         .detach();
@@ -90,21 +173,18 @@ impl Render for MusicApp {
                     .w_full()
                     .h_full()
                     .child(self.sidebar.clone())
-                    .child(
-                        div()
-                            .flex()
-                            .flex_1()
-                            .h_full()
-                            .items_center()
-                            .justify_center()
-                            .child(match current_route {
-                                NavigationRoute::Home => Label::new("Home").into_any_element(),
-                                NavigationRoute::TestPage { message } => {
-                                    Label::new(message).into_any_element()
-                                }
-                                NavigationRoute::Settings => SettingsPage::new().into_any_element(),
-                            }),
-                    ),
+                    .child(div().flex().flex_1().h_full().overflow_hidden().child(
+                        match current_route {
+                            NavigationRoute::Home => HomePage::new().into_any_element(),
+                            NavigationRoute::LocalLibrary => {
+                                LocalLibraryPage::new().into_any_element()
+                            }
+                            NavigationRoute::TestPage { message } => {
+                                TestPage::new(message).into_any_element()
+                            }
+                            NavigationRoute::Settings => SettingsPage::new().into_any_element(),
+                        },
+                    )),
             )
     }
 }
@@ -112,6 +192,10 @@ impl Render for MusicApp {
 fn main() {
     tracing_subscriber::fmt::init();
 
+    let cmd_sender = init_audio();
+
+    let audio_player = AudioPlayer(cmd_sender);
+    // GPUI
     gpui_kit::application()
         .with_assets(AllAssets)
         .run(move |cx| {
@@ -129,13 +213,14 @@ fn main() {
             ]);
 
             cx.set_global(NavigationHistory::new(NavigationRoute::Home));
+            cx.set_global(CurrentTrackList::new());
+            cx.set_global(audio_player);
             init_config(cx);
 
             // Save Settings on quit
             cx.on_app_quit(|cx| {
-                let config = Config {
-                    theme_name: cx.theme().theme_name().clone(),
-                };
+                let mut config = cx.global::<Config>().clone();
+                config.theme_name = cx.theme().theme_name().clone();
 
                 async move {
                     save_config(&config);

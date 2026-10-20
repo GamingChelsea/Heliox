@@ -1,12 +1,193 @@
-use std::{fs::File, io::BufReader, path::PathBuf};
+use std::{
+    fs::File,
+    num::NonZero,
+    path::Path,
+    sync::{mpsc::Sender, LazyLock},
+    time::Duration,
+};
+
+use rodio::Source;
+use symphonia::core::audio::SampleBuffer;
+use symphonia::core::codecs::{CodecRegistry, Decoder, DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::errors::Error as SymphoniaError;
+use symphonia::core::formats::{FormatOptions, FormatReader};
+use symphonia::core::io::MediaSourceStream;
+use symphonia::core::meta::MetadataOptions;
+use symphonia::core::probe::Hint;
+use symphonia_adapter_libopus::OpusDecoder;
+
+static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
+    let mut registry = CodecRegistry::new();
+    symphonia::default::register_enabled_codecs(&mut registry);
+    registry.register_all::<OpusDecoder>();
+    registry
+});
 
 pub enum AudioCommand {
-    Play(PathBuf),
+    Play(std::path::PathBuf),
     ResumePause,
     Stop,
 }
 
-pub fn init_audio() -> std::sync::mpsc::Sender<AudioCommand> {
+pub struct SymphoniaSource {
+    reader: Box<dyn FormatReader>,
+    decoder: Box<dyn Decoder>,
+    track_id: u32,
+    sample_buf: Option<SampleBuffer<f32>>,
+    sample_index: usize,
+    sample_rate: NonZero<u32>,
+    channels: NonZero<u16>,
+    total_duration: Option<Duration>,
+}
+
+impl SymphoniaSource {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let file = File::open(path.as_ref())?;
+        let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+        let mut hint = Hint::new();
+        if let Some(ext) = path.as_ref().extension().and_then(|e| e.to_str()) {
+            hint.with_extension(ext);
+        }
+
+        let format_opts = FormatOptions {
+            enable_gapless: true,
+            ..Default::default()
+        };
+        let metadata_opts = MetadataOptions::default();
+
+        let probed = symphonia::default::get_probe()
+            .format(&hint, mss, &format_opts, &metadata_opts)?;
+
+        let reader = probed.format;
+
+        let track = reader
+            .tracks()
+            .iter()
+            .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
+            .ok_or_else(|| SymphoniaError::Unsupported("No supported audio track found"))?;
+
+        let track_id = track.id;
+        let codec_params = track.codec_params.clone();
+
+        let sample_rate = NonZero::new(codec_params.sample_rate.unwrap_or(44100))
+            .unwrap_or(NonZero::new(44100).unwrap());
+        let channels = NonZero::new(
+            codec_params
+                .channels
+                .map(|c| c.count() as u16)
+                .unwrap_or(2),
+        )
+        .unwrap_or(NonZero::new(2).unwrap());
+
+        let total_duration = if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, codec_params.time_base) {
+            let time = tb.calc_time(n_frames);
+            Some(Duration::from_secs(time.seconds) + Duration::from_secs_f64(time.frac))
+        } else {
+            None
+        };
+
+        let decoder_opts = DecoderOptions::default();
+        let decoder = CODEC_REGISTRY.make(&codec_params, &decoder_opts)?;
+
+        Ok(Self {
+            reader,
+            decoder,
+            track_id,
+            sample_buf: None,
+            sample_index: 0,
+            sample_rate,
+            channels,
+            total_duration,
+        })
+    }
+
+    fn fill_next_packet(&mut self) -> Result<bool, SymphoniaError> {
+        loop {
+            let packet = match self.reader.next_packet() {
+                Ok(packet) => packet,
+                Err(SymphoniaError::IoError(err))
+                    if err.kind() == std::io::ErrorKind::UnexpectedEof =>
+                {
+                    return Ok(false);
+                }
+                Err(err) => return Err(err),
+            };
+
+            if packet.track_id() != self.track_id {
+                continue;
+            }
+
+            match self.decoder.decode(&packet) {
+                Ok(decoded) => {
+                    let mut sample_buf = self.sample_buf.take().unwrap_or_else(|| {
+                        SampleBuffer::<f32>::new(decoded.capacity() as u64, *decoded.spec())
+                    });
+                    sample_buf.copy_interleaved_ref(decoded);
+                    self.sample_buf = Some(sample_buf);
+                    self.sample_index = 0;
+                    return Ok(true);
+                }
+                Err(SymphoniaError::DecodeError(err)) => {
+                    tracing::warn!(?err, "Skipping corrupted audio packet");
+                    continue;
+                }
+                Err(err) => return Err(err),
+            }
+        }
+    }
+}
+
+impl Iterator for SymphoniaSource {
+    type Item = f32;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            if let Some(ref buf) = self.sample_buf {
+                let samples = buf.samples();
+                if self.sample_index < samples.len() {
+                    let sample = samples[self.sample_index];
+                    self.sample_index += 1;
+                    return Some(sample);
+                }
+            }
+
+            match self.fill_next_packet() {
+                Ok(true) => {}
+                Ok(false) => return None,
+                Err(err) => {
+                    tracing::error!(?err, "Failed to decode packet");
+                    return None;
+                }
+            }
+        }
+    }
+}
+
+impl Source for SymphoniaSource {
+    fn current_span_len(&self) -> Option<usize> {
+        if let Some(ref buf) = self.sample_buf {
+            let remaining = buf.samples().len().saturating_sub(self.sample_index);
+            Some(remaining)
+        } else {
+            None
+        }
+    }
+
+    fn channels(&self) -> NonZero<u16> {
+        self.channels
+    }
+
+    fn sample_rate(&self) -> NonZero<u32> {
+        self.sample_rate
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        self.total_duration
+    }
+}
+
+pub fn init_audio() -> Sender<AudioCommand> {
     let (sender, receiver) = std::sync::mpsc::channel::<AudioCommand>();
 
     std::thread::spawn(move || {
@@ -19,18 +200,23 @@ pub fn init_audio() -> std::sync::mpsc::Sender<AudioCommand> {
         while let Ok(command) = receiver.recv() {
             match command {
                 AudioCommand::Play(path) => {
-                    // todo: Improve later maybe only data not a path as input for streaming
-                    let file = BufReader::new(File::open(path).unwrap());
-                    current_player = Some(rodio::play(&sink_handle.mixer(), file));
+                    match SymphoniaSource::new(&path) {
+                        Ok(source) => {
+                            let player = rodio::Player::connect_new(&sink_handle.mixer());
+                            player.append(source);
+                            current_player = Some(player);
+                        }
+                        Err(err) => {
+                            tracing::error!(?err, "Failed to load audio file with symphonia");
+                        }
+                    }
                 }
                 AudioCommand::ResumePause => {
                     if let Some(ref player) = current_player {
-                        if let Ok(plyer) = player {
-                            if plyer.is_paused() {
-                                plyer.play();
-                            } else {
-                                plyer.stop();
-                            }
+                        if player.is_paused() {
+                            player.play();
+                        } else {
+                            player.stop();
                         }
                     }
                 }

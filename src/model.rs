@@ -36,14 +36,23 @@ pub struct Track {
     pub path: std::path::PathBuf,
 }
 
+#[derive(Clone, PartialEq)]
+pub enum TrackListSource {
+    LocalLibrary,
+    Playlist(u64),
+    Album(u64),
+}
+
 #[derive(Clone)]
 pub struct CurrentTrackList {
+    pub source: Option<TrackListSource>,
     pub tracks: Option<Vec<Track>>,
     pub selected_id: Option<u64>,
 }
 impl CurrentTrackList {
     pub fn new() -> Self {
         Self {
+            source: None,
             tracks: None,
             selected_id: None,
         }

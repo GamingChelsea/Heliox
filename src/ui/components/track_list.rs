@@ -1,4 +1,4 @@
-use crate::model::{AudioPlayer, CurrentTrackList, Track};
+use crate::model::{AudioPlayer, Config, CurrentTrackList, Track};
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
@@ -24,6 +24,7 @@ impl RenderOnce for TrackList {
         let count = self.tracks.len();
         let selected_id = cx.global::<CurrentTrackList>().selected_id;
         let tracks = self.tracks;
+        let shorten = cx.global::<Config>().shorten_titles;
 
         v_flex()
             .size_full()
@@ -68,8 +69,7 @@ impl RenderOnce for TrackList {
                             let track = &tracks[idx];
                             let track_id = track.id;
                             let is_selected = selected_id == Some(track_id);
-                            let path = track.path.clone();
-
+                            let clone_track = track.clone();
                             h_flex()
                                 .id(ElementId::NamedInteger("track-row".into(), track_id))
                                 .w_full()
@@ -77,7 +77,7 @@ impl RenderOnce for TrackList {
                                 .px_4()
                                 .gap_3()
                                 .items_center()
-                                .rounded_md()
+                                .rounded(cx.theme().radius)
                                 .when(is_selected, |this| this.bg(cx.theme().accent))
                                 .hover(|this| this.bg(cx.theme().accent.opacity(0.5)))
                                 .cursor_pointer()
@@ -85,10 +85,9 @@ impl RenderOnce for TrackList {
                                     cx.update_global::<CurrentTrackList, _>(|list, _cx| {
                                         list.selected_id = Some(track_id);
                                     });
-                                    let _ = cx
-                                        .global::<AudioPlayer>()
-                                        .0
-                                        .send(crate::audio::AudioCommand::Play(path.clone()));
+                                    cx.update_global::<AudioPlayer, _>(|audio_player, _cx| {
+                                        audio_player.play(clone_track.clone());
+                                    });
                                 })
                                 .child(
                                     div()
@@ -103,7 +102,10 @@ impl RenderOnce for TrackList {
                                         .flex_basis(px(0.0))
                                         .overflow_hidden()
                                         .child(
-                                            div().text_sm().truncate().child(track.title.clone()),
+                                            div()
+                                                .text_sm()
+                                                .truncate()
+                                                .child(track.display_title(shorten)),
                                         ),
                                 )
                                 .child(

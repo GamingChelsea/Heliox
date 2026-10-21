@@ -15,6 +15,11 @@ impl RenderOnce for LocalLibraryPage {
 
         let Some(tracks) = tracks_opt else {
             return div()
+                .size_full()
+                .items_center()
+                .justify_center()
+                .content_center()
+                .text_center()
                 .child("No tracks found, or still loading...")
                 .into_any_element();
         };

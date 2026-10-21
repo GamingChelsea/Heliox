@@ -46,27 +46,44 @@ impl RenderOnce for SettingsPage {
             SettingPage::new("General")
                 .default_open(true)
                 .group(
-                    SettingGroup::new().title("Appearance").item(
-                        SettingItem::new(
-                            "Theme",
-                            SettingField::scrollable_dropdown(
-                                themes,
-                                move |_| current_theme_name.clone(),
-                                |val: SharedString, cx: &mut App| {
-                                    if let Some(theme) =
-                                        ThemeRegistry::global(cx).themes().get(&val).cloned()
-                                    {
-                                        Theme::update(cx, |current| current.apply_config(&theme));
+                    SettingGroup::new()
+                        .title("Appearance")
+                        .item(
+                            SettingItem::new(
+                                "Theme",
+                                SettingField::scrollable_dropdown(
+                                    themes,
+                                    move |_| current_theme_name.clone(),
+                                    |val: SharedString, cx: &mut App| {
+                                        if let Some(theme) =
+                                            ThemeRegistry::global(cx).themes().get(&val).cloned()
+                                        {
+                                            Theme::update(cx, |current| current.apply_config(&theme));
+                                            cx.update_global::<Config, _>(|config, _cx| {
+                                                config.theme_name = SharedString::from(&*theme.name);
+                                                let _ = save_config(config);
+                                            });
+                                        }
+                                    },
+                                ),
+                            )
+                            .description("Select a nice theme."),
+                        )
+                        .item(
+                            SettingItem::new(
+                                "Shorten Title",
+                                SettingField::switch(
+                                    |cx: &App| cx.global::<Config>().shorten_titles,
+                                    |val: bool, cx: &mut App| {
                                         cx.update_global::<Config, _>(|config, _cx| {
-                                            config.theme_name = SharedString::from(&*theme.name);
+                                            config.shorten_titles = val;
                                             let _ = save_config(config);
                                         });
-                                    }
-                                },
-                            ),
-                        )
-                        .description("Select a nice theme."),
-                    ),
+                                    },
+                                ),
+                            )
+                            .description("If this option is selected the title are shortened, which may result in unexpected behavior"),
+                        ),
                 )
                 .group(
                     SettingGroup::new().title("Files").item(

@@ -12,6 +12,12 @@ impl TestPage {
 
 impl RenderOnce for TestPage {
     fn render(self, _window: &mut Window, _cx: &mut App) -> impl IntoElement {
-        Label::new(self.message)
+        div()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .content_center()
+            .text_center()
+            .child(Label::new(self.message))
     }
 }

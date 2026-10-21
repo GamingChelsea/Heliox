@@ -4,7 +4,7 @@ use gpui_kit::{
     component::{WindowExt, command::CommandState},
 };
 
-use crate::{audio::AudioCommand, model::AudioPlayer, router::NavigationHistory};
+use crate::{model::AudioPlayer, router::NavigationHistory};
 
 pub struct PaletteAction {
     pub label: &'static str,
@@ -21,7 +21,7 @@ pub fn playback_actions() -> Vec<PaletteAction> {
             keywords: &["play", "resume", "pause"],
             execute: |_cmd, window, cx| {
                 cx.update_global::<AudioPlayer, _>(|audio_player, cx| {
-                    let _ = audio_player.0.send(AudioCommand::ResumePause);
+                    let _ = audio_player.toggle_play();
                     window.close_dialog(cx);
                 });
             },
@@ -32,7 +32,7 @@ pub fn playback_actions() -> Vec<PaletteAction> {
             keywords: &["stop"],
             execute: |_cmd, window, cx| {
                 cx.update_global::<AudioPlayer, _>(|audio_player, cx| {
-                    let _ = audio_player.0.send(AudioCommand::Stop);
+                    let _ = audio_player.stop();
                     window.close_dialog(cx);
                 });
             },

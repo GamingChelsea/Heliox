@@ -26,6 +26,7 @@ static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
 pub enum AudioCommand {
     Play(std::path::PathBuf),
     ResumePause,
+    SetVolume(f32),
     Stop,
 }
 
@@ -212,6 +213,11 @@ pub fn init_audio() -> Sender<AudioCommand> {
                         } else {
                             player.pause();
                         }
+                    }
+                }
+                AudioCommand::SetVolume(vol) => {
+                    if let Some(ref player) = current_player {
+                        player.set_volume(vol);
                     }
                 }
                 AudioCommand::Stop => {

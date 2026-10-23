@@ -1,5 +1,6 @@
 use crate::audio::init_audio;
-use crate::model::{AudioPlayer, Config, CurrentTrackList};
+use crate::model::{AudioPlayer, Config, CurrentTrackList, MediaControl, UiMediaEvent};
+use crate::player::{pause, resume, stop, toggle_play};
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::ui::components::command_palette;
 use crate::ui::components::player_bar::PlayerBar;
@@ -18,6 +19,7 @@ use std::path::PathBuf;
 pub mod audio;
 pub mod library;
 pub mod model;
+pub mod player;
 pub mod router;
 pub mod ui;
 
@@ -97,9 +99,7 @@ impl Render for MusicApp {
                 }),
             )
             .on_action(cx.listener(|_this, _action: &ResumePause, _window, cx| {
-                cx.update_global::<AudioPlayer, _>(|audio_player, _cx| {
-                    let _ = audio_player.toggle_play();
-                })
+                toggle_play(cx);
             }))
             .v_flex()
             .size_full()
@@ -186,6 +186,121 @@ fn main() {
                 },
                 cx,
                 |window, cx| {
+                    #[cfg(not(target_os = "windows"))]
+                    let hwnd = None;
+
+                    #[cfg(target_os = "windows")]
+                    let hwnd: Option<*mut std::ffi::c_void> = {
+                        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                        if let Ok(handle) = window.window_handle() {
+                            if let RawWindowHandle::Win32(win32) = handle.as_raw() {
+                                Some(win32.hwnd.get() as *mut std::ffi::c_void)
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    };
+
+                    let media_control_config = souvlaki::PlatformConfig {
+                        dbus_name: "rust_music_player",
+                        display_name: "Rust Music Player",
+                        hwnd,
+                    };
+
+                    let mut media_controls = souvlaki::MediaControls::new(media_control_config)
+                        .expect("Error creating media controls");
+
+                    let (ui_sender, ui_receiver) = async_channel::unbounded::<UiMediaEvent>();
+
+                    let audio_sender = cx.global::<AudioPlayer>().sender.clone();
+                    let ui_sender_clone = ui_sender.clone();
+                    media_controls
+                        .attach(move |event| match event {
+                            souvlaki::MediaControlEvent::Toggle => {
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::Toggle);
+                            }
+                            souvlaki::MediaControlEvent::Play => {
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::Play);
+                            }
+                            souvlaki::MediaControlEvent::Pause => {
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::Pause);
+                            }
+                            souvlaki::MediaControlEvent::Stop => {
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::Stop);
+                            }
+                            souvlaki::MediaControlEvent::Next => {
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::Next);
+                            }
+                            souvlaki::MediaControlEvent::Previous => {
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::Previous);
+                            }
+                            souvlaki::MediaControlEvent::SetVolume(value) => {
+                                let vol = value.clamp(0.0, 1.0);
+                                let _ = audio_sender
+                                    .send(crate::audio::AudioCommand::SetVolume(vol as f32));
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::SetVolume(vol));
+                            }
+                            souvlaki::MediaControlEvent::SetPosition(pos) => {
+                                let _ = audio_sender
+                                    .send(crate::audio::AudioCommand::Seek(pos.0.as_secs_f32()));
+                            }
+                            souvlaki::MediaControlEvent::Quit => {
+                                let _ = ui_sender_clone.send_blocking(UiMediaEvent::Quit);
+                            }
+                            _ => {}
+                        })
+                        .expect("Failed to attach media control handler");
+                    cx.set_global(MediaControl(media_controls));
+
+                    cx.spawn(async move |cx: &mut AsyncApp| {
+                        while let Ok(event) = ui_receiver.recv().await {
+                            match event {
+                                UiMediaEvent::Toggle => {
+                                    cx.update(|cx| {
+                                        toggle_play(cx);
+                                    });
+                                }
+                                UiMediaEvent::Play => {
+                                    cx.update(|cx| {
+                                        resume(cx);
+                                    });
+                                }
+                                UiMediaEvent::Pause => {
+                                    cx.update(|cx| {
+                                        pause(cx);
+                                    });
+                                }
+                                UiMediaEvent::Stop => {
+                                    cx.update(|cx| {
+                                        stop(cx);
+                                    });
+                                }
+                                UiMediaEvent::Quit => {
+                                    cx.update(|cx| {
+                                        cx.quit();
+                                    });
+                                    break;
+                                }
+                                UiMediaEvent::SetVolume(vol) => {
+                                    cx.update(|cx| {
+                                        cx.update_global::<Config, _>(|config, _cx| {
+                                            config.volume = vol as f32;
+                                            let _ = save_config(config);
+                                        });
+                                        cx.update_global::<MediaControl, _>(|mc, _cx| {
+                                            mc.set_volume(vol);
+                                        });
+                                    });
+                                }
+                                UiMediaEvent::Next => {}
+                                UiMediaEvent::Previous => {}
+                            }
+                        }
+                    })
+                    .detach();
+
                     // Theme
                     let config = load_config();
                     if let Err(err) =

@@ -1,4 +1,5 @@
-use crate::model::{AudioPlayer, Config, CurrentTrackList, Track};
+use crate::model::{Config, CurrentTrackList, Track};
+use crate::player::play_track;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
@@ -82,12 +83,7 @@ impl RenderOnce for TrackList {
                                 .hover(|this| this.bg(cx.theme().accent.opacity(0.5)))
                                 .cursor_pointer()
                                 .on_click(move |_event, _window, cx| {
-                                    cx.update_global::<CurrentTrackList, _>(|list, _cx| {
-                                        list.selected_id = Some(track_id);
-                                    });
-                                    cx.update_global::<AudioPlayer, _>(|audio_player, _cx| {
-                                        audio_player.play(clone_track.clone());
-                                    });
+                                    play_track(clone_track.clone(), cx);
                                 })
                                 .child(
                                     div()

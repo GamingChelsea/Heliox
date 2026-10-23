@@ -48,23 +48,8 @@ impl AudioPlayer {
             progress_ms,
         }
     }
-
-    pub fn play(&mut self, track: Track) {
-        let _ = self.sender.send(AudioCommand::Play(track.path.clone()));
-        self.current_track = Some(track);
-        self.is_playing = true;
-    }
-
-    pub fn toggle_play(&mut self) {
-        let _ = self.sender.send(AudioCommand::ResumePause);
-        self.is_playing = !self.is_playing;
-    }
-
-    pub fn stop(&mut self) {
-        let _ = self.sender.send(AudioCommand::Stop);
-        self.is_playing = false;
-    }
 }
+
 impl Global for AudioPlayer {}
 
 #[derive(Clone)]
@@ -108,4 +93,55 @@ impl CurrentTrackList {
         }
     }
 }
+
 impl Global for CurrentTrackList {}
+
+pub struct MediaControl(pub souvlaki::MediaControls);
+impl Global for MediaControl {}
+
+#[derive(Debug, Clone)]
+pub enum UiMediaEvent {
+    Toggle,
+    Play,
+    Pause,
+    Stop,
+    Quit,
+    SetVolume(f64),
+    Next,
+    Previous,
+}
+
+impl MediaControl {
+    pub fn update_track(&mut self, track: &Track) {
+        let _ = self.0.set_metadata(souvlaki::MediaMetadata {
+            title: Some(&track.title),
+            artist: Some(&track.artist),
+            album: Some(&track.album),
+            duration: Some(std::time::Duration::from_secs(track.duration_secs as u64)),
+            cover_url: None,
+        });
+        let _ = self
+            .0
+            .set_playback(souvlaki::MediaPlayback::Playing { progress: None });
+    }
+
+    pub fn set_playback(&mut self, is_playing: bool) {
+        let playback = if is_playing {
+            souvlaki::MediaPlayback::Playing { progress: None }
+        } else {
+            souvlaki::MediaPlayback::Paused { progress: None }
+        };
+        let _ = self.0.set_playback(playback);
+    }
+
+    pub fn set_volume(&mut self, volume: f64) {
+        #[cfg(all(unix, not(target_os = "macos")))]
+        {
+            let _ = self.0.set_volume(volume);
+        }
+        #[cfg(not(all(unix, not(target_os = "macos"))))]
+        {
+            let _ = volume;
+        }
+    }
+}

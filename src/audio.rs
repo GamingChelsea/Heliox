@@ -26,6 +26,8 @@ static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
 pub enum AudioCommand {
     Play(std::path::PathBuf),
     ResumePause,
+    Resume,
+    Pause,
     SetVolume(f32),
     Seek(f32),
     Stop,
@@ -159,7 +161,7 @@ impl SymphoniaSource {
         let total_samples_per_sec = (self.sample_rate.get() as u64) * (self.channels.get() as u64);
         self.samples_played = (time_secs as f64 * total_samples_per_sec as f64) as u64;
         self.progress_ms.store(
-            ((time_secs * 1000.0) as u64),
+            (time_secs * 1000.0) as u64,
             std::sync::atomic::Ordering::Relaxed,
         );
 
@@ -267,6 +269,16 @@ pub fn init_audio() -> (Sender<AudioCommand>, Arc<AtomicU64>) {
                         } else {
                             player.pause();
                         }
+                    }
+                }
+                AudioCommand::Resume => {
+                    if let Some(ref player) = current_player {
+                        player.play();
+                    }
+                }
+                AudioCommand::Pause => {
+                    if let Some(ref player) = current_player {
+                        player.pause();
                     }
                 }
                 AudioCommand::SetVolume(vol) => {

@@ -7,7 +7,8 @@ use gpui_kit::{
 
 use crate::{
     audio::AudioCommand,
-    model::{AudioPlayer, Config},
+    model::{AudioPlayer, Config, MediaControl},
+    player::toggle_play,
     save_config,
     ui::components::audio_slider::AudioSlider,
 };
@@ -172,9 +173,7 @@ impl RenderOnce for PlayerBar {
                                     )
                                     .child(Button::new("Play").icon(play_icon).on_click(
                                         |_event, _window, cx| {
-                                            cx.update_global::<AudioPlayer, _>(
-                                                |audio_player, _cx| audio_player.toggle_play(),
-                                            );
+                                            toggle_play(cx);
                                         },
                                     ))
                                     .child(
@@ -250,6 +249,9 @@ impl RenderOnce for PlayerBar {
                                 cx.update_global::<Config, _>(|config, _cx| {
                                     config.volume = new_vol;
                                     let _ = save_config(config);
+                                });
+                                cx.update_global::<MediaControl, _>(|mc, _cx| {
+                                    mc.set_volume(new_vol as f64);
                                 });
                                 window.refresh();
                             },

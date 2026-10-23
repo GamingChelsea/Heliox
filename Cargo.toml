@@ -4,14 +4,17 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+async-channel = "2.5"
 dirs = "7.0.0"
 gpui-kit = { git = "https://github.com/gpui-ce/gpui-component", package = "gpui_ce_kit" }
 lofty = "0.25.4"
+raw-window-handle = "0.6.2"
 rayon = "1.12.0"
 rfd = "0.17.2"
 rodio = { version = "0.23.0", features = ["symphonia-all"] }
 ron = "0.12.2"
 serde = { version = "1.0.229", features = ["derive"] }
+souvlaki = "0.8.3"
 strum = { version = "0.28.0", features = ["derive"] }
 symphonia = { version = "0.5.4", features = ["all"] }
 symphonia-adapter-libopus = "0.2.0"

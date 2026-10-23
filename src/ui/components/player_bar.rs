@@ -22,12 +22,17 @@ impl PlayerBar {
 }
 
 impl RenderOnce for PlayerBar {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let volume = cx.global::<Config>().volume;
 
-        let (current_track, is_playing) = cx.read_global::<AudioPlayer, _>(|player, _cx| {
-            (player.current_track.clone(), player.is_playing)
-        });
+        let (current_track, is_playing, progress_ms) =
+            cx.read_global::<AudioPlayer, _>(|player, _cx| {
+                (
+                    player.current_track.clone(),
+                    player.is_playing,
+                    player.progress_ms.clone(),
+                )
+            });
         let shorten = cx.global::<Config>().shorten_titles;
         let title: SharedString = current_track
             .as_ref()
@@ -43,7 +48,33 @@ impl RenderOnce for PlayerBar {
             IconName::Play
         };
 
+        if is_playing {
+            window.use_keyed_state("playback-timer", cx, |window, cx| {
+                window
+                    .spawn(cx, async move |cx| {
+                        loop {
+                            cx.background_executor()
+                                .timer(std::time::Duration::from_millis(100))
+                                .await;
+                            let _ = cx.update(|window, _cx| {
+                                window.refresh();
+                            });
+                        }
+                    })
+                    .detach();
+            });
+        }
+
+        let current_secs = progress_ms.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
+        let total_secs = current_track.as_ref().map(|t| t.duration_secs).unwrap_or(0);
+        let progress = if total_secs > 0 {
+            (current_secs / total_secs as f32).clamp(0.0, 1.0)
+        } else {
+            0.0
+        };
+
         h_flex()
+            .relative()
             .h_20()
             .w_full()
             .items_center()
@@ -56,6 +87,7 @@ impl RenderOnce for PlayerBar {
             .child(
                 h_flex()
                     .w(px(260.0))
+                    .flex_shrink_0()
                     .min_w_0()
                     .gap_3()
                     .items_center()
@@ -93,10 +125,21 @@ impl RenderOnce for PlayerBar {
                             .min_w_0()
                             .overflow_hidden()
                             .text_left()
-                            .gap_y_0p5()
-                            .child(div().text_sm().truncate().child(title))
+                            .gap_1()
                             .child(
                                 div()
+                                    .h(px(32.0))
+                                    .flex()
+                                    .items_center()
+                                    .text_sm()
+                                    .truncate()
+                                    .child(title),
+                            )
+                            .child(
+                                div()
+                                    .h(px(16.0))
+                                    .flex()
+                                    .items_center()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .truncate()
@@ -106,10 +149,10 @@ impl RenderOnce for PlayerBar {
             )
             // Middle
             .child(
-                v_flex()
-                    .flex_1()
-                    .h_full()
-                    .min_w_0()
+                div()
+                    .absolute()
+                    .inset_0()
+                    .flex()
                     .items_center()
                     .justify_center()
                     .child(
@@ -118,6 +161,7 @@ impl RenderOnce for PlayerBar {
                             .max_w(px(550.0))
                             .items_center()
                             .justify_center()
+                            .gap_1()
                             .child(
                                 h_flex()
                                     .gap_2()
@@ -138,6 +182,52 @@ impl RenderOnce for PlayerBar {
                                             .icon(IconName::SkipForward)
                                             .child("NOT WORKING"),
                                     ),
+                            )
+                            .child(
+                                h_flex()
+                                    .w_full()
+                                    .items_center()
+                                    .gap_2()
+                                    // Current time
+                                    .child(
+                                        div()
+                                            .w_10()
+                                            .h(px(16.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_end()
+                                            .text_xs()
+                                            .line_height(px(16.0))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(format_time(current_secs as u32)),
+                                    )
+                                    // Bar
+                                    .child(
+                                        div().flex_1().h(px(16.0)).flex().items_center().child(
+                                            AudioSlider::new("playback-progress-slider", progress)
+                                                .on_change(move |new_val, window, cx| {
+                                                    let target_secs = new_val * total_secs as f32;
+                                                    let _ = cx
+                                                        .global::<AudioPlayer>()
+                                                        .sender
+                                                        .send(AudioCommand::Seek(target_secs));
+                                                    window.refresh();
+                                                }),
+                                        ),
+                                    )
+                                    // Total
+                                    .child(
+                                        div()
+                                            .w_10()
+                                            .h(px(16.0))
+                                            .flex()
+                                            .items_center()
+                                            .justify_start()
+                                            .text_xs()
+                                            .line_height(px(16.0))
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(format_time(total_secs)),
+                                    ),
                             ),
                     ),
             )
@@ -145,27 +235,26 @@ impl RenderOnce for PlayerBar {
             .child(
                 h_flex()
                     .w(px(260.0))
+                    .flex_shrink_0()
                     .min_w_0()
                     .justify_end()
                     .items_center()
                     .gap_2()
-                    .child(
-                        div().w(px(80.0)).child(
-                            AudioSlider::new("player-volume-slider", volume).on_change(
-                                |new_vol, window, cx| {
-                                    let _ = cx
-                                        .global::<AudioPlayer>()
-                                        .sender
-                                        .send(AudioCommand::SetVolume(new_vol));
-                                    cx.update_global::<Config, _>(|config, _cx| {
-                                        config.volume = new_vol;
-                                        let _ = save_config(config);
-                                    });
-                                    window.refresh();
-                                },
-                            ),
+                    .child(div().w(px(80.0)).child(
+                        AudioSlider::new("player-volume-slider", volume).on_change(
+                            |new_vol, window, cx| {
+                                let _ = cx
+                                    .global::<AudioPlayer>()
+                                    .sender
+                                    .send(AudioCommand::SetVolume(new_vol));
+                                cx.update_global::<Config, _>(|config, _cx| {
+                                    config.volume = new_vol;
+                                    let _ = save_config(config);
+                                });
+                                window.refresh();
+                            },
                         ),
-                    )
+                    ))
                     .child(
                         div()
                             .w_8()
@@ -176,4 +265,8 @@ impl RenderOnce for PlayerBar {
                     ),
             )
     }
+}
+
+fn format_time(secs: u32) -> String {
+    format!("{:02}:{:02}", secs / 60, secs % 60)
 }

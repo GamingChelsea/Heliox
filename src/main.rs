@@ -137,9 +137,9 @@ impl Render for MusicApp {
 
 fn main() {
     tracing_subscriber::fmt::init();
-    let cmd_sender = init_audio();
+    let (cmd_sender, progress_ms) = init_audio();
+    let audio_player = AudioPlayer::new(cmd_sender, progress_ms);
 
-    let audio_player = AudioPlayer::new(cmd_sender);
     // GPUI
     gpui_kit::application()
         .with_assets(AllAssets)

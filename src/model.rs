@@ -1,6 +1,9 @@
 use gpui_kit::{Global, SharedString, private::serde::Deserialize};
 use serde::Serialize;
-use std::path::PathBuf;
+use std::{
+    path::PathBuf,
+    sync::{Arc, atomic::AtomicU64},
+};
 
 use crate::{audio::AudioCommand, library::clean_title};
 
@@ -34,13 +37,15 @@ pub struct AudioPlayer {
     pub sender: std::sync::mpsc::Sender<AudioCommand>,
     pub current_track: Option<Track>,
     pub is_playing: bool,
+    pub progress_ms: Arc<AtomicU64>,
 }
 impl AudioPlayer {
-    pub fn new(sender: std::sync::mpsc::Sender<AudioCommand>) -> Self {
+    pub fn new(sender: std::sync::mpsc::Sender<AudioCommand>, progress_ms: Arc<AtomicU64>) -> Self {
         Self {
             sender,
             current_track: None,
             is_playing: false,
+            progress_ms,
         }
     }
 

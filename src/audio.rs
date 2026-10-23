@@ -2,18 +2,18 @@ use std::{
     fs::File,
     num::NonZero,
     path::Path,
-    sync::{LazyLock, mpsc::Sender},
+    sync::{Arc, LazyLock, atomic::AtomicU64, mpsc::Sender},
     time::Duration,
 };
 
 use rodio::Source;
-use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{CODEC_TYPE_NULL, CodecRegistry, Decoder, DecoderOptions};
 use symphonia::core::errors::Error as SymphoniaError;
 use symphonia::core::formats::{FormatOptions, FormatReader};
 use symphonia::core::io::MediaSourceStream;
 use symphonia::core::meta::MetadataOptions;
 use symphonia::core::probe::Hint;
+use symphonia::core::{audio::SampleBuffer, units::Time};
 use symphonia_adapter_libopus::OpusDecoder;
 
 static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
@@ -27,6 +27,7 @@ pub enum AudioCommand {
     Play(std::path::PathBuf),
     ResumePause,
     SetVolume(f32),
+    Seek(f32),
     Stop,
 }
 
@@ -39,10 +40,15 @@ pub struct SymphoniaSource {
     sample_rate: NonZero<u32>,
     channels: NonZero<u16>,
     total_duration: Option<Duration>,
+    progress_ms: Arc<AtomicU64>,
+    samples_played: u64,
 }
 
 impl SymphoniaSource {
-    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        progress_ms: Arc<AtomicU64>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let file = File::open(path.as_ref())?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
@@ -96,6 +102,8 @@ impl SymphoniaSource {
             sample_rate,
             channels,
             total_duration,
+            progress_ms,
+            samples_played: 0,
         })
     }
 
@@ -133,6 +141,30 @@ impl SymphoniaSource {
             }
         }
     }
+
+    pub fn seek(&mut self, time_secs: f32) -> Result<(), SymphoniaError> {
+        let time = Time::from(time_secs as f64);
+        self.reader.seek(
+            symphonia::core::formats::SeekMode::Accurate,
+            symphonia::core::formats::SeekTo::Time {
+                time,
+                track_id: Some(self.track_id),
+            },
+        )?;
+
+        self.decoder.reset();
+        self.sample_buf = None;
+        self.sample_index = 0;
+
+        let total_samples_per_sec = (self.sample_rate.get() as u64) * (self.channels.get() as u64);
+        self.samples_played = (time_secs as f64 * total_samples_per_sec as f64) as u64;
+        self.progress_ms.store(
+            ((time_secs * 1000.0) as u64),
+            std::sync::atomic::Ordering::Relaxed,
+        );
+
+        Ok(())
+    }
 }
 
 impl Iterator for SymphoniaSource {
@@ -145,6 +177,18 @@ impl Iterator for SymphoniaSource {
                 if self.sample_index < samples.len() {
                     let sample = samples[self.sample_index];
                     self.sample_index += 1;
+
+                    self.samples_played += 1;
+                    // Sync for UI, only every 1000 samples
+                    if self.samples_played % 1000 == 0 {
+                        let total_samples_per_sec =
+                            (self.sample_rate.get() as u64) * (self.channels.get() as u64);
+                        if total_samples_per_sec > 0 {
+                            let ms = (self.samples_played * 1000) / total_samples_per_sec;
+                            self.progress_ms
+                                .store(ms, std::sync::atomic::Ordering::Relaxed);
+                        }
+                    }
                     return Some(sample);
                 }
             }
@@ -184,8 +228,10 @@ impl Source for SymphoniaSource {
     }
 }
 
-pub fn init_audio() -> Sender<AudioCommand> {
+pub fn init_audio() -> (Sender<AudioCommand>, Arc<AtomicU64>) {
     let (sender, receiver) = std::sync::mpsc::channel::<AudioCommand>();
+    let progress_ms = Arc::new(AtomicU64::new(0));
+    let progress_for_thread = progress_ms.clone();
 
     std::thread::spawn(move || {
         let mut sink_handle =
@@ -193,19 +239,27 @@ pub fn init_audio() -> Sender<AudioCommand> {
         sink_handle.log_on_drop(false);
 
         let mut current_player = None;
+        let mut current_path: Option<std::path::PathBuf> = None;
+        let mut current_volume = 1.0f32;
 
         while let Ok(command) = receiver.recv() {
             match command {
-                AudioCommand::Play(path) => match SymphoniaSource::new(&path) {
-                    Ok(source) => {
-                        let player = rodio::Player::connect_new(&sink_handle.mixer());
-                        player.append(source);
-                        current_player = Some(player);
+                AudioCommand::Play(path) => {
+                    progress_for_thread.store(0, std::sync::atomic::Ordering::Relaxed);
+                    current_path = Some(path.clone());
+
+                    match SymphoniaSource::new(&path, progress_for_thread.clone()) {
+                        Ok(source) => {
+                            let player = rodio::Player::connect_new(&sink_handle.mixer());
+                            player.set_volume(current_volume);
+                            player.append(source);
+                            current_player = Some(player);
+                        }
+                        Err(err) => {
+                            tracing::error!(?err, "Failed to load audio file with symphonia");
+                        }
                     }
-                    Err(err) => {
-                        tracing::error!(?err, "Failed to load audio file with symphonia");
-                    }
-                },
+                }
                 AudioCommand::ResumePause => {
                     if let Some(ref player) = current_player {
                         if player.is_paused() {
@@ -216,8 +270,26 @@ pub fn init_audio() -> Sender<AudioCommand> {
                     }
                 }
                 AudioCommand::SetVolume(vol) => {
+                    current_volume = vol;
                     if let Some(ref player) = current_player {
                         player.set_volume(vol);
+                    }
+                }
+                AudioCommand::Seek(time_secs) => {
+                    if let Some(ref path) = current_path {
+                        if let Ok(mut source) =
+                            SymphoniaSource::new(path, progress_for_thread.clone())
+                        {
+                            if let Ok(()) = source.seek(time_secs) {
+                                if let Some(player) = current_player.take() {
+                                    player.stop();
+                                }
+                                let player = rodio::Player::connect_new(&sink_handle.mixer());
+                                player.set_volume(current_volume);
+                                player.append(source);
+                                current_player = Some(player);
+                            }
+                        }
                     }
                 }
                 AudioCommand::Stop => {
@@ -225,10 +297,12 @@ pub fn init_audio() -> Sender<AudioCommand> {
                         player.stop();
                     }
                     current_player = None;
+                    current_path = None;
+                    progress_for_thread.store(0, std::sync::atomic::Ordering::Relaxed);
                 }
             }
         }
     });
 
-    sender
+    (sender, progress_ms)
 }

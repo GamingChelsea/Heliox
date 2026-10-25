@@ -17,6 +17,7 @@ use std::fs::{self};
 use std::path::PathBuf;
 
 pub mod audio;
+pub mod discord;
 pub mod library;
 pub mod model;
 pub mod player;
@@ -103,7 +104,7 @@ impl Render for MusicApp {
             }))
             .v_flex()
             .size_full()
-            .child(TitleBar::new().child("Music Player"))
+            .child(TitleBar::new().child("Heliox"))
             .child(
                 div()
                     .flex()
@@ -137,8 +138,10 @@ impl Render for MusicApp {
 
 fn main() {
     tracing_subscriber::fmt::init();
+    let config = load_config();
     let (cmd_sender, progress_ms) = init_audio();
     let audio_player = AudioPlayer::new(cmd_sender, progress_ms);
+    let discord_rpc = discord::init(config.discord_rpc);
 
     // GPUI
     gpui_kit::application()
@@ -161,7 +164,14 @@ fn main() {
             cx.set_global(NavigationHistory::new(NavigationRoute::Home));
             cx.set_global(CurrentTrackList::new());
             cx.set_global(audio_player);
+            cx.set_global(discord_rpc);
             init_config(cx);
+
+            let initial_volume = cx.global::<Config>().volume;
+            let _ = cx
+                .global::<AudioPlayer>()
+                .sender
+                .send(audio::AudioCommand::SetVolume(initial_volume));
 
             // Save Settings on quit
             cx.on_app_quit(|cx| {
@@ -204,8 +214,8 @@ fn main() {
                     };
 
                     let media_control_config = souvlaki::PlatformConfig {
-                        dbus_name: "rust_music_player",
-                        display_name: "Rust Music Player",
+                        dbus_name: "heliox",
+                        display_name: "Heliox",
                         hwnd,
                     };
 
@@ -347,7 +357,7 @@ fn load_config() -> Config {
 
 fn get_path() -> PathBuf {
     let path = dirs::config_dir()
-        .and_then(|p| Some(p.join("GamingChelsea").join("MusicPlayer")))
+        .and_then(|p| Some(p.join("GamingChelsea").join("Heliox")))
         .expect("Error crating path");
     let _ = fs::create_dir_all(path.clone()).expect("Error creating directories");
     path

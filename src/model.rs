@@ -17,6 +17,8 @@ pub struct Config {
     pub shorten_titles: bool,
     #[serde(default)]
     pub volume: f32,
+    #[serde(default)]
+    pub discord_rpc: bool,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -27,6 +29,7 @@ impl Default for Config {
                 .unwrap_or_default(),
             shorten_titles: true,
             volume: 0.50,
+            discord_rpc: false,
         }
     }
 }
@@ -52,7 +55,7 @@ impl AudioPlayer {
 
 impl Global for AudioPlayer {}
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Track {
     pub id: u64,
     pub title: String,
@@ -145,3 +148,6 @@ impl MediaControl {
         }
     }
 }
+
+pub use crate::discord::{DiscordCommand, DiscordRpc};
+

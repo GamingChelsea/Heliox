@@ -5,7 +5,7 @@
             "name": "Debug (MSVC Windows)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/target/debug/rust-music-player.exe",
+            "program": "${workspaceFolder}/target/debug/heliox.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "cargo build"
@@ -14,7 +14,7 @@
             "name": "Release (MSVC Windows)",
             "type": "cppvsdbg",
             "request": "launch",
-            "program": "${workspaceFolder}/target/release/rust-music-player.exe",
+            "program": "${workspaceFolder}/target/release/heliox.exe",
             "args": [],
             "cwd": "${workspaceFolder}",
             "preLaunchTask": "cargo build release"

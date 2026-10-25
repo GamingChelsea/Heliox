@@ -1,16 +1,15 @@
-use gpui_kit::{
-    assets::IconName,
-    base::{h_flex, v_flex},
-    component::{ActiveTheme, button::Button},
-    *,
-};
-
 use crate::{
     audio::AudioCommand,
     model::{AudioPlayer, Config, MediaControl},
     player::toggle_play,
     save_config,
     ui::components::audio_slider::AudioSlider,
+};
+use gpui_kit::{
+    assets::IconName,
+    base::{h_flex, v_flex},
+    component::{ActiveTheme, button::Button},
+    *,
 };
 
 #[derive(IntoElement)]

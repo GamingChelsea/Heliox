@@ -8,7 +8,7 @@
             "args": [
                 "build",
                 "--bin",
-                "rust-music-player"
+                "heliox"
             ],
             "problemMatcher": [
                 "$rustc"
@@ -23,7 +23,7 @@
                 "build",
                 "--release",
                 "--bin",
-                "rust-music-player"
+                "heliox"
             ],
             "problemMatcher": [
                 "$rustc"

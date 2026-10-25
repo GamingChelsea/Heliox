@@ -41,7 +41,7 @@ impl Render for AppSidebar {
                     h_flex()
                         .gap_2()
                         .child(Icon::new(IconName::Music))
-                        .when(!self.collapsed, |this| this.child("Music Player")),
+                        .when(!self.collapsed, |this| this.child("Heliox")),
                 ),
             )
             .child(

@@ -11,7 +11,7 @@ use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry};
 use gpui_kit::*;
 use rfd::FileDialog;
 
-use crate::model::Config;
+use crate::model::{AudioPlayer, Config, DiscordRpc};
 use crate::save_config;
 
 #[derive(IntoElement)]
@@ -82,7 +82,41 @@ impl RenderOnce for SettingsPage {
                                     },
                                 ),
                             )
-                            .description("If this option is selected the title are shortened, which may result in unexpected behavior"),
+                            .description("If this option is selected the title are shortened, which may result in unexpected behavior."),
+                        ),
+                ).group(
+                    SettingGroup::new()
+                        .title("Connections")
+                        .item(
+                            SettingItem::new(
+                                "Discord RPC",
+                                SettingField::switch(
+                                    |cx: &App| cx.global::<Config>().discord_rpc,
+                                    |val: bool, cx: &mut App| {
+                                        cx.update_global::<Config, _>(|config, _cx| {
+                                            config.discord_rpc = val;
+                                            let _ = save_config(config);
+                                        });
+                                        cx.global::<DiscordRpc>().set_enabled(val);
+                                        if val {
+                                            let (current_track, is_playing) =
+                                                cx.read_global::<AudioPlayer, _>(|player, _| {
+                                                    (player.current_track.clone(), player.is_playing)
+                                                });
+                                            if let Some(track) = current_track {
+                                                if is_playing {
+                                                    cx.global::<DiscordRpc>().update_track(&track);
+                                                } else {
+                                                    cx.global::<DiscordRpc>().set_paused(&track);
+                                                }
+                                            } else {
+                                                cx.global::<DiscordRpc>().set_idle();
+                                            }
+                                        }
+                                    },
+                                ),
+                            )
+                            .description("Toggle to display Heliox as an Discord activity."),
                         ),
                 )
                 .group(

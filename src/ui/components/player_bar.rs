@@ -4,12 +4,12 @@ use crate::{
     player::{play_next, play_prev, toggle_play, toggle_repeat},
     queue::QueueManager,
     save_config,
-    ui::components::audio_slider::AudioSlider,
+    ui::components::{audio_slider::AudioSlider, cover::cover_art, queue_popover::QueuePopover},
 };
 use gpui_kit::{
     assets::IconName,
     base::{Selectable, h_flex, v_flex},
-    component::{ActiveTheme, button::Button},
+    component::{ActiveTheme, button::Button, popover::Popover},
     *,
 };
 
@@ -39,9 +39,15 @@ impl RenderOnce for PlayerBar {
             .as_ref()
             .map(|t| t.display_title(shorten).into())
             .unwrap_or_else(|| "No track playing".into());
-        let artist: SharedString = current_track
+        let subtitle: SharedString = current_track
             .as_ref()
-            .map(|t| t.artist.clone().into())
+            .map(|t| {
+                if t.album.is_empty() || t.album == t.title {
+                    t.artist.clone().into()
+                } else {
+                    format!("{} • {}", t.artist, t.album).into()
+                }
+            })
             .unwrap_or_else(|| "".into());
         let play_icon = if is_playing {
             IconName::Pause
@@ -99,59 +105,28 @@ impl RenderOnce for PlayerBar {
                     .min_w_0()
                     .gap_3()
                     .items_center()
-                    .child(
-                        img("TODO.svg")
-                            .id("inbox-image")
-                            .size(px(56.))
-                            .flex_shrink_0()
-                            .rounded(cx.theme().radius)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .bg(cx.theme().muted)
-                            .overflow_hidden()
-                            .object_fit(ObjectFit::Contain)
-                            .with_loading(|| {
-                                h_flex()
-                                    .size_full()
-                                    .justify_center()
-                                    .items_center()
-                                    .child(IconName::Loader)
-                                    .into_any_element()
-                            })
-                            .with_fallback(|| {
-                                h_flex()
-                                    .size_full()
-                                    .justify_center()
-                                    .items_center()
-                                    .child(IconName::Music)
-                                    .into_any_element()
-                            }),
-                    )
+                    .child(cover_art(cx))
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
                             .overflow_hidden()
                             .text_left()
-                            .gap_1()
+                            .justify_center()
+                            .gap(px(2.0))
                             .child(
                                 div()
-                                    .h(px(32.0))
-                                    .flex()
-                                    .items_center()
                                     .text_sm()
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
                                     .truncate()
                                     .child(title),
                             )
                             .child(
                                 div()
-                                    .h(px(16.0))
-                                    .flex()
-                                    .items_center()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
                                     .truncate()
-                                    .child(artist),
+                                    .child(subtitle),
                             ),
                     ),
             )
@@ -255,6 +230,12 @@ impl RenderOnce for PlayerBar {
                             .on_click(|_event, _window, cx| {
                                 toggle_repeat(cx);
                             }),
+                    )
+                    .child(
+                        Popover::new("queue_popover")
+                            .anchor(Anchor::BottomCenter)
+                            .trigger(Button::new("queue_btn").icon(IconName::ListMusic).outline())
+                            .content(|_state, _window, _cx| QueuePopover::new()),
                     )
                     .child(div().w(px(80.0)).child(
                         AudioSlider::new("player-volume-slider", volume).on_change(

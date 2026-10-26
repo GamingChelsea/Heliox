@@ -1,10 +1,13 @@
+use crate::{
+    model::Config,
+    player::{play_next, play_prev, stop, toggle_play},
+    router::NavigationHistory,
+};
 use gpui_kit::{
     App, BorrowAppContext, Entity, Window,
     assets::IconName,
     component::{WindowExt, command::CommandState},
 };
-
-use crate::{player::{stop, toggle_play}, router::NavigationHistory};
 
 pub struct PaletteAction {
     pub label: &'static str,
@@ -21,6 +24,24 @@ pub fn playback_actions() -> Vec<PaletteAction> {
             keywords: &["play", "resume", "pause"],
             execute: |_cmd, window, cx| {
                 toggle_play(cx);
+                window.close_dialog(cx);
+            },
+        },
+        PaletteAction {
+            label: "Play the previous track",
+            icon: IconName::SkipBack,
+            keywords: &["next"],
+            execute: |_cmd, window, cx| {
+                play_prev(cx);
+                window.close_dialog(cx);
+            },
+        },
+        PaletteAction {
+            label: "Play the next track",
+            icon: IconName::SkipForward,
+            keywords: &["next"],
+            execute: |_cmd, window, cx| {
+                play_next(cx);
                 window.close_dialog(cx);
             },
         },
@@ -70,7 +91,14 @@ pub fn navigation_actions() -> Vec<PaletteAction> {
     ]
 }
 
-pub fn app_actions() -> Vec<PaletteAction> {
+pub fn app_actions(cx: &App) -> Vec<PaletteAction> {
+    let discord_enabled = cx.global::<Config>().discord_rpc;
+    let discord_icon = if discord_enabled {
+        IconName::ToggleRight
+    } else {
+        IconName::ToggleLeft
+    };
+
     vec![
         PaletteAction {
             label: "Change Theme",
@@ -79,6 +107,15 @@ pub fn app_actions() -> Vec<PaletteAction> {
             execute: |command, window, cx| {
                 command.update(cx, |state, cx| state.set_query("ct ", window, cx));
                 window.refresh();
+            },
+        },
+        PaletteAction {
+            label: "Toggle Discord RPC",
+            icon: discord_icon,
+            keywords: &["dc", "toggle discord", "discord"],
+            execute: |_cmd, window, cx| {
+                crate::discord::toggle_discord_rpc(cx);
+                window.close_dialog(cx);
             },
         },
         PaletteAction {
@@ -92,10 +129,10 @@ pub fn app_actions() -> Vec<PaletteAction> {
     ]
 }
 
-pub fn all_action_groups() -> Vec<(&'static str, Vec<PaletteAction>)> {
+pub fn all_action_groups(cx: &App) -> Vec<(&'static str, Vec<PaletteAction>)> {
     vec![
         ("Playback", playback_actions()),
         ("Navigation", navigation_actions()),
-        ("App", app_actions()),
+        ("App", app_actions(cx)),
     ]
 }

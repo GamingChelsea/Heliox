@@ -114,7 +114,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
                 cmd = match mode {
                     PaletteMode::Themes(search) => configure_theme_mode(cmd, search, &themes, cx),
                     PaletteMode::Navigation(search) => configure_nav_mode(cmd, search, &routes, cx),
-                    PaletteMode::Actions => configure_action_mode(cmd, command.clone()),
+                    PaletteMode::Actions => configure_action_mode(cmd, command.clone(), cx),
                 };
 
                 content.child(cmd.empty(|_, _, _| {
@@ -212,8 +212,8 @@ fn configure_nav_mode(
         })
 }
 
-fn configure_action_mode(mut cmd: Command, command: Entity<CommandState>) -> Command {
-    let groups = all_action_groups();
+fn configure_action_mode(mut cmd: Command, command: Entity<CommandState>, cx: &App) -> Command {
+    let groups = all_action_groups(cx);
 
     for (group_label, actions) in &groups {
         let mut cmd_group = CommandGroup::new().label(*group_label);

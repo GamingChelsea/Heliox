@@ -2,7 +2,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use gpui_kit::Global;
+use gpui_kit::{BorrowAppContext, Global};
 
 use crate::model::Track;
 
@@ -44,6 +44,28 @@ impl DiscordRpc {
 }
 
 impl Global for DiscordRpc {}
+
+pub fn toggle_discord_rpc(cx: &mut gpui_kit::App) {
+    let new_val = !cx.global::<crate::model::Config>().discord_rpc;
+    cx.update_global::<crate::model::Config, _>(|config, _cx| {
+        config.discord_rpc = new_val;
+        let _ = crate::save_config(config);
+    });
+    cx.global::<DiscordRpc>().set_enabled(new_val);
+    if new_val {
+        let current_track = cx.global::<crate::model::AudioPlayer>().current_track.clone();
+        let is_playing = cx.global::<crate::model::AudioPlayer>().is_playing;
+        if let Some(track) = current_track {
+            if is_playing {
+                cx.global::<DiscordRpc>().update_track(&track);
+            } else {
+                cx.global::<DiscordRpc>().set_paused(&track);
+            }
+        } else {
+            cx.global::<DiscordRpc>().set_idle();
+        }
+    }
+}
 
 pub fn init(enabled: bool) -> DiscordRpc {
     let (tx, rx) = mpsc::channel::<DiscordCommand>();

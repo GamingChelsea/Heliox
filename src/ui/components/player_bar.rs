@@ -1,13 +1,14 @@
 use crate::{
     audio::AudioCommand,
     model::{AudioPlayer, Config, MediaControl},
-    player::toggle_play,
+    player::{play_next, play_prev, toggle_play, toggle_repeat},
+    queue::QueueManager,
     save_config,
     ui::components::audio_slider::AudioSlider,
 };
 use gpui_kit::{
     assets::IconName,
-    base::{h_flex, v_flex},
+    base::{Selectable, h_flex, v_flex},
     component::{ActiveTheme, button::Button},
     *,
 };
@@ -47,6 +48,13 @@ impl RenderOnce for PlayerBar {
         } else {
             IconName::Play
         };
+        let repeat_mode = cx.global::<QueueManager>().repeat_mode;
+        let repeat_icon = match repeat_mode {
+            crate::queue::RepeatMode::Off => IconName::RepeatOff,
+            crate::queue::RepeatMode::Context => IconName::Repeat,
+            crate::queue::RepeatMode::Track => IconName::Repeat1,
+        };
+        let is_repeat_active = repeat_mode != crate::queue::RepeatMode::Off;
 
         if is_playing {
             window.use_keyed_state("playback-timer", cx, |window, cx| {
@@ -165,20 +173,22 @@ impl RenderOnce for PlayerBar {
                             .child(
                                 h_flex()
                                     .gap_2()
-                                    .child(
-                                        Button::new("Prev")
-                                            .icon(IconName::SkipBack)
-                                            .child("NOT WORKING"),
-                                    )
+                                    .child(Button::new("Prev").icon(IconName::SkipBack).on_click(
+                                        |_event, _window, cx| {
+                                            play_prev(cx);
+                                        },
+                                    ))
                                     .child(Button::new("Play").icon(play_icon).on_click(
                                         |_event, _window, cx| {
                                             toggle_play(cx);
                                         },
                                     ))
                                     .child(
-                                        Button::new("Next")
-                                            .icon(IconName::SkipForward)
-                                            .child("NOT WORKING"),
+                                        Button::new("Next").icon(IconName::SkipForward).on_click(
+                                            |_event, _window, cx| {
+                                                play_next(cx);
+                                            },
+                                        ),
                                     ),
                             )
                             .child(
@@ -238,6 +248,14 @@ impl RenderOnce for PlayerBar {
                     .justify_end()
                     .items_center()
                     .gap_2()
+                    .child(
+                        Button::new("repeat_icon")
+                            .icon(repeat_icon)
+                            .selected(is_repeat_active)
+                            .on_click(|_event, _window, cx| {
+                                toggle_repeat(cx);
+                            }),
+                    )
                     .child(div().w(px(80.0)).child(
                         AudioSlider::new("player-volume-slider", volume).on_change(
                             |new_vol, window, cx| {

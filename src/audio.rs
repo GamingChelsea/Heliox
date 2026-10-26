@@ -230,7 +230,9 @@ impl Source for SymphoniaSource {
     }
 }
 
-pub fn init_audio() -> (Sender<AudioCommand>, Arc<AtomicU64>) {
+pub fn init_audio(
+    ui_sender: async_channel::Sender<crate::model::UiMediaEvent>,
+) -> (Sender<AudioCommand>, Arc<AtomicU64>) {
     let (sender, receiver) = std::sync::mpsc::channel::<AudioCommand>();
     let progress_ms = Arc::new(AtomicU64::new(0));
     let progress_for_thread = progress_ms.clone();
@@ -240,11 +242,42 @@ pub fn init_audio() -> (Sender<AudioCommand>, Arc<AtomicU64>) {
             rodio::DeviceSinkBuilder::open_default_sink().expect("open default audio stream");
         sink_handle.log_on_drop(false);
 
-        let mut current_player = None;
+        let mut current_player: Option<rodio::Player> = None;
         let mut current_path: Option<std::path::PathBuf> = None;
         let mut current_volume = 1.0f32;
+        let mut has_played = false;
 
-        while let Ok(command) = receiver.recv() {
+        loop {
+            let command = if current_player.is_some() {
+                match receiver.recv_timeout(Duration::from_millis(50)) {
+                    Ok(cmd) => Some(cmd),
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        if has_played {
+                            if let Some(ref player) = current_player {
+                                if !player.is_paused() && player.empty() {
+                                    has_played = false;
+                                    current_player = None;
+                                    current_path = None;
+                                    progress_for_thread.store(0, std::sync::atomic::Ordering::Relaxed);
+                                    let _ = ui_sender.send_blocking(crate::model::UiMediaEvent::TrackEnded);
+                                }
+                            }
+                        }
+                        None
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
+            } else {
+                match receiver.recv() {
+                    Ok(cmd) => Some(cmd),
+                    Err(_) => break,
+                }
+            };
+
+            let Some(command) = command else {
+                continue;
+            };
+
             match command {
                 AudioCommand::Play(path) => {
                     progress_for_thread.store(0, std::sync::atomic::Ordering::Relaxed);
@@ -256,9 +289,12 @@ pub fn init_audio() -> (Sender<AudioCommand>, Arc<AtomicU64>) {
                             player.set_volume(current_volume);
                             player.append(source);
                             current_player = Some(player);
+                            has_played = true;
                         }
                         Err(err) => {
                             tracing::error!(?err, "Failed to load audio file with symphonia");
+                            has_played = false;
+                            current_player = None;
                         }
                     }
                 }
@@ -300,6 +336,7 @@ pub fn init_audio() -> (Sender<AudioCommand>, Arc<AtomicU64>) {
                                 player.set_volume(current_volume);
                                 player.append(source);
                                 current_player = Some(player);
+                                has_played = true;
                             }
                         }
                     }
@@ -308,6 +345,7 @@ pub fn init_audio() -> (Sender<AudioCommand>, Arc<AtomicU64>) {
                     if let Some(ref player) = current_player {
                         player.stop();
                     }
+                    has_played = false;
                     current_player = None;
                     current_path = None;
                     progress_for_thread.store(0, std::sync::atomic::Ordering::Relaxed);

@@ -4,8 +4,7 @@ use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicU64},
 };
-
-use crate::{audio::AudioCommand, library::clean_title};
+use crate::{audio::AudioCommand, library::clean_title, queue::RepeatMode};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -19,6 +18,8 @@ pub struct Config {
     pub volume: f32,
     #[serde(default)]
     pub discord_rpc: bool,
+    #[serde(default)]
+    pub repeat_mode: RepeatMode,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -30,6 +31,7 @@ impl Default for Config {
             shorten_titles: true,
             volume: 0.50,
             discord_rpc: false,
+            repeat_mode: RepeatMode::default(),
         }
     }
 }
@@ -112,6 +114,7 @@ pub enum UiMediaEvent {
     SetVolume(f64),
     Next,
     Previous,
+    TrackEnded,
 }
 
 impl MediaControl {

@@ -1,5 +1,10 @@
-use crate::{model::CurrentTrackList, ui::components::track_list::TrackList};
-use gpui_kit::{base::v_flex, component::label::Label, *};
+use crate::{model::CurrentTrackList, player::play_context, ui::components::track_list::TrackList};
+use gpui_kit::{
+    assets::IconName,
+    base::{h_flex, v_flex},
+    component::{button::Button, label::Label},
+    *,
+};
 
 #[derive(IntoElement)]
 pub struct LocalLibraryPage;
@@ -24,15 +29,29 @@ impl RenderOnce for LocalLibraryPage {
                 .into_any_element();
         };
 
+        let tracks_for_play = tracks.clone();
+
         v_flex()
             .size_full()
             .p_4()
             .gap_2()
             .child(
-                v_flex()
-                    .gap_1()
-                    .child(Label::new("Local Library").text_3xl())
-                    .child(Label::new("This is your local Library.").text_xs()),
+                h_flex()
+                    .justify_between()
+                    .child(
+                        v_flex()
+                            .gap_1()
+                            .child(Label::new("Local Library").text_3xl())
+                            .child(Label::new("This is your local Library.").text_xs()),
+                    )
+                    .child(
+                        Button::new("play_button")
+                            .icon(IconName::Play)
+                            .child("Play playlist")
+                            .on_click(move |_event, _window, cx| {
+                                play_context(tracks_for_play.clone(), 0, cx);
+                            }),
+                    ),
             )
             .child(TrackList::new(tracks))
             .into_any_element()

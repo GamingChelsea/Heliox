@@ -1,6 +1,7 @@
 use crate::audio::init_audio;
 use crate::model::{AudioPlayer, Config, CurrentTrackList, MediaControl, UiMediaEvent};
-use crate::player::{pause, resume, stop, toggle_play};
+use crate::player::{on_track_end, pause, play_next, play_prev, resume, stop, toggle_play};
+use crate::queue::QueueManager;
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::ui::components::command_palette;
 use crate::ui::components::player_bar::PlayerBar;
@@ -21,6 +22,7 @@ pub mod discord;
 pub mod library;
 pub mod model;
 pub mod player;
+pub mod queue;
 pub mod router;
 pub mod ui;
 
@@ -139,7 +141,8 @@ impl Render for MusicApp {
 fn main() {
     tracing_subscriber::fmt::init();
     let config = load_config();
-    let (cmd_sender, progress_ms) = init_audio();
+    let (ui_sender, ui_receiver) = async_channel::unbounded::<UiMediaEvent>();
+    let (cmd_sender, progress_ms) = init_audio(ui_sender.clone());
     let audio_player = AudioPlayer::new(cmd_sender, progress_ms);
     let discord_rpc = discord::init(config.discord_rpc);
 
@@ -161,11 +164,15 @@ fn main() {
                 KeyBinding::new("space", ResumePause, None),
             ]);
 
+            init_config(cx);
             cx.set_global(NavigationHistory::new(NavigationRoute::Home));
             cx.set_global(CurrentTrackList::new());
             cx.set_global(audio_player);
             cx.set_global(discord_rpc);
-            init_config(cx);
+            let initial_repeat = cx.global::<Config>().repeat_mode;
+            let mut queue_manager = QueueManager::default();
+            queue_manager.repeat_mode = initial_repeat;
+            cx.set_global(queue_manager);
 
             let initial_volume = cx.global::<Config>().volume;
             let _ = cx
@@ -221,8 +228,6 @@ fn main() {
 
                     let mut media_controls = souvlaki::MediaControls::new(media_control_config)
                         .expect("Error creating media controls");
-
-                    let (ui_sender, ui_receiver) = async_channel::unbounded::<UiMediaEvent>();
 
                     let audio_sender = cx.global::<AudioPlayer>().sender.clone();
                     let ui_sender_clone = ui_sender.clone();
@@ -304,8 +309,21 @@ fn main() {
                                         });
                                     });
                                 }
-                                UiMediaEvent::Next => {}
-                                UiMediaEvent::Previous => {}
+                                UiMediaEvent::Next => {
+                                    cx.update(|cx| {
+                                        play_next(cx);
+                                    });
+                                }
+                                UiMediaEvent::Previous => {
+                                    cx.update(|cx| {
+                                        play_prev(cx);
+                                    });
+                                }
+                                UiMediaEvent::TrackEnded => {
+                                    cx.update(|cx| {
+                                        on_track_end(cx);
+                                    });
+                                }
                             }
                         }
                     })
@@ -342,7 +360,7 @@ fn init_config(cx: &mut App) {
     cx.set_global(config);
 }
 
-fn save_config(config: &Config) {
+pub fn save_config(config: &Config) {
     if let Ok(serialized) = ron::ser::to_string_pretty(config, ron::ser::PrettyConfig::default()) {
         let _ = fs::write(get_config_path(), serialized);
     }

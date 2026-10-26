@@ -1,5 +1,5 @@
 use crate::model::{Config, CurrentTrackList, Track};
-use crate::player::play_track;
+use crate::player::play_context;
 use gpui_kit::base::{h_flex, v_flex};
 use gpui_kit::component::ActiveTheme;
 use gpui_kit::prelude::FluentBuilder;
@@ -70,7 +70,8 @@ impl RenderOnce for TrackList {
                             let track = &tracks[idx];
                             let track_id = track.id;
                             let is_selected = selected_id == Some(track_id);
-                            let clone_track = track.clone();
+                            let all_tracks = tracks.clone();
+
                             h_flex()
                                 .id(ElementId::NamedInteger("track-row".into(), track_id))
                                 .w_full()
@@ -83,7 +84,7 @@ impl RenderOnce for TrackList {
                                 .hover(|this| this.bg(cx.theme().accent.opacity(0.5)))
                                 .cursor_pointer()
                                 .on_click(move |_event, _window, cx| {
-                                    play_track(clone_track.clone(), cx);
+                                    play_context(all_tracks.clone(), idx, cx);
                                 })
                                 .child(
                                     div()

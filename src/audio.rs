@@ -1,8 +1,13 @@
 use std::{
     fs::File,
+    io::Read,
     num::NonZero,
     path::Path,
-    sync::{Arc, LazyLock, atomic::AtomicU64, mpsc::Sender},
+    sync::{
+        Arc, LazyLock,
+        atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
+        mpsc::Sender,
+    },
     time::Duration,
 };
 
@@ -16,6 +21,8 @@ use symphonia::core::probe::Hint;
 use symphonia::core::{audio::SampleBuffer, units::Time};
 use symphonia_adapter_libopus::OpusDecoder;
 
+use crate::stream::{ProgressiveReader, StreamState};
+
 static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
     let mut registry = CodecRegistry::new();
     symphonia::default::register_enabled_codecs(&mut registry);
@@ -25,6 +32,7 @@ static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
 
 pub enum AudioCommand {
     Play(std::path::PathBuf),
+    PlayStream { url: String, hint_extension: String },
     ResumePause,
     Resume,
     Pause,
@@ -53,37 +61,50 @@ impl SymphoniaSource {
     ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let file = File::open(path.as_ref())?;
         let mss = MediaSourceStream::new(Box::new(file), Default::default());
-
         let mut hint = Hint::new();
         if let Some(ext) = path.as_ref().extension().and_then(|e| e.to_str()) {
             hint.with_extension(ext);
         }
+        Self::init(mss, hint, progress_ms)
+    }
 
+    pub fn new_streaming(
+        reader: ProgressiveReader,
+        hint_extension: &str,
+        progress_ms: Arc<AtomicU64>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
+        let mss = MediaSourceStream::new(Box::new(reader), Default::default());
+
+        let mut hint = Hint::new();
+        hint.with_extension(hint_extension);
+
+        Self::init(mss, hint, progress_ms)
+    }
+
+    fn init(
+        mss: MediaSourceStream,
+        hint: Hint,
+        progress_ms: Arc<AtomicU64>,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         let format_opts = FormatOptions {
             enable_gapless: true,
             ..Default::default()
         };
         let metadata_opts = MetadataOptions::default();
-
         let probed =
             symphonia::default::get_probe().format(&hint, mss, &format_opts, &metadata_opts)?;
-
         let reader = probed.format;
-
         let track = reader
             .tracks()
             .iter()
             .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
             .ok_or_else(|| SymphoniaError::Unsupported("No supported audio track found"))?;
-
         let track_id = track.id;
         let codec_params = track.codec_params.clone();
-
         let sample_rate = NonZero::new(codec_params.sample_rate.unwrap_or(44100))
             .unwrap_or(NonZero::new(44100).unwrap());
         let channels = NonZero::new(codec_params.channels.map(|c| c.count() as u16).unwrap_or(2))
             .unwrap_or(NonZero::new(2).unwrap());
-
         let total_duration =
             if let (Some(n_frames), Some(tb)) = (codec_params.n_frames, codec_params.time_base) {
                 let time = tb.calc_time(n_frames);
@@ -91,10 +112,8 @@ impl SymphoniaSource {
             } else {
                 None
             };
-
         let decoder_opts = DecoderOptions::default();
         let decoder = CODEC_REGISTRY.make(&codec_params, &decoder_opts)?;
-
         Ok(Self {
             reader,
             decoder,
@@ -247,6 +266,9 @@ pub fn init_audio(
         let mut current_volume = 1.0f32;
         let mut has_played = false;
 
+        let mut current_stream_state: Option<Arc<StreamState>> = None;
+        let mut _current_temp_file: Option<tempfile::NamedTempFile> = None;
+
         loop {
             let command = if current_player.is_some() {
                 match receiver.recv_timeout(Duration::from_millis(50)) {
@@ -258,8 +280,10 @@ pub fn init_audio(
                                     has_played = false;
                                     current_player = None;
                                     current_path = None;
-                                    progress_for_thread.store(0, std::sync::atomic::Ordering::Relaxed);
-                                    let _ = ui_sender.send_blocking(crate::model::UiMediaEvent::TrackEnded);
+                                    progress_for_thread
+                                        .store(0, std::sync::atomic::Ordering::Relaxed);
+                                    let _ = ui_sender
+                                        .send_blocking(crate::model::UiMediaEvent::TrackEnded);
                                 }
                             }
                         }
@@ -280,6 +304,11 @@ pub fn init_audio(
 
             match command {
                 AudioCommand::Play(path) => {
+                    if let Some(state) = current_stream_state.take() {
+                        state.is_cancelled.store(true, Ordering::Relaxed);
+                    }
+                    _current_temp_file = None;
+
                     progress_for_thread.store(0, std::sync::atomic::Ordering::Relaxed);
                     current_path = Some(path.clone());
 
@@ -293,6 +322,117 @@ pub fn init_audio(
                         }
                         Err(err) => {
                             tracing::error!(?err, "Failed to load audio file with symphonia");
+                            has_played = false;
+                            current_player = None;
+                        }
+                    }
+                }
+                AudioCommand::PlayStream {
+                    url,
+                    hint_extension,
+                } => {
+                    if let Some(state) = current_stream_state.take() {
+                        state.is_cancelled.store(true, Ordering::Relaxed);
+                    }
+                    _current_temp_file = None;
+
+                    let Ok(temp_file) = tempfile::Builder::new()
+                        .suffix(&format!(".{}", hint_extension))
+                        .tempfile()
+                    else {
+                        tracing::error!("Failed to create temporary file for streaming");
+                        continue;
+                    };
+                    let temp_path = temp_file.path().to_path_buf();
+
+                    let state = Arc::new(StreamState {
+                        downloaded_bytes: AtomicUsize::new(0),
+                        is_finished: AtomicBool::new(false),
+                        is_cancelled: AtomicBool::new(false),
+                    });
+
+                    let downloaded_state = state.clone();
+                    let downloaded_path = temp_path.clone();
+
+                    std::thread::spawn(move || {
+                        use std::io::Write;
+
+                        let mut writer = std::fs::OpenOptions::new()
+                            .write(true)
+                            .open(&downloaded_path)
+                            .unwrap();
+
+                        let mut response = match reqwest::blocking::get(&url) {
+                            Ok(res) => res,
+                            Err(err) => {
+                                tracing::error!(?err, "Download failed");
+                                downloaded_state.is_finished.store(true, Ordering::Relaxed);
+                                return;
+                            }
+                        };
+
+                        let mut buffer = [0u8; 8192];
+                        loop {
+                            if downloaded_state.is_cancelled.load(Ordering::Relaxed) {
+                                break;
+                            }
+
+                            match response.read(&mut buffer) {
+                                // Download Finished
+                                Ok(0) => break,
+                                Ok(n) => {
+                                    writer.write_all(&buffer[..n]).unwrap();
+                                    writer.flush().unwrap();
+                                    downloaded_state
+                                        .downloaded_bytes
+                                        .fetch_add(n, Ordering::Relaxed);
+                                }
+                                Err(_) => break,
+                            }
+                        }
+                        downloaded_state.is_finished.store(true, Ordering::Relaxed);
+                    });
+
+                    current_stream_state = Some(state.clone());
+                    current_path = Some(temp_path.clone());
+                    _current_temp_file = Some(temp_file);
+
+                    progress_for_thread.store(0, Ordering::Relaxed);
+
+                    // Wait 256kb or download is finished
+                    while state.downloaded_bytes.load(Ordering::Relaxed) < 256 * 1024
+                        && !state.is_finished.load(Ordering::Relaxed)
+                    {
+                        if state.is_cancelled.load(Ordering::Relaxed) {
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+
+                    if state.is_cancelled.load(Ordering::Relaxed) {
+                        continue;
+                    }
+
+                    let Ok(read_file) = std::fs::File::open(&temp_path) else {
+                        tracing::error!("Could not open temp stream file for reading");
+                        continue;
+                    };
+                    let progressive_reader =
+                        crate::stream::ProgressiveReader::new(read_file, state.clone());
+                    match SymphoniaSource::new_streaming(
+                        progressive_reader,
+                        &hint_extension,
+                        progress_for_thread.clone(),
+                    ) {
+                        Ok(source) => {
+                            let player = rodio::Player::connect_new(&sink_handle.mixer());
+                            player.set_volume(current_volume);
+                            player.append(source);
+                            current_player = Some(player);
+                            has_played = true;
+                        }
+                        Err(err) => {
+                            tracing::error!(?err, "Failed to load audio stream with symphonia");
                             has_played = false;
                             current_player = None;
                         }
@@ -325,9 +465,28 @@ pub fn init_audio(
                 }
                 AudioCommand::Seek(time_secs) => {
                     if let Some(ref path) = current_path {
-                        if let Ok(mut source) =
+                        let source_res = if let Some(ref state) = current_stream_state {
+                            match std::fs::File::open(path) {
+                                Ok(file) => {
+                                    let reader =
+                                        crate::stream::ProgressiveReader::new(file, state.clone());
+                                    let ext =
+                                        path.extension().and_then(|e| e.to_str()).unwrap_or("");
+                                    SymphoniaSource::new_streaming(
+                                        reader,
+                                        ext,
+                                        progress_for_thread.clone(),
+                                    )
+                                }
+                                Err(err) => {
+                                    Err(Box::new(err) as Box<dyn std::error::Error + Send + Sync>)
+                                }
+                            }
+                        } else {
                             SymphoniaSource::new(path, progress_for_thread.clone())
-                        {
+                        };
+
+                        if let Ok(mut source) = source_res {
                             if let Ok(()) = source.seek(time_secs) {
                                 if let Some(player) = current_player.take() {
                                     player.stop();
@@ -342,6 +501,11 @@ pub fn init_audio(
                     }
                 }
                 AudioCommand::Stop => {
+                    if let Some(state) = current_stream_state.take() {
+                        state.is_cancelled.store(true, Ordering::Relaxed);
+                    }
+                    _current_temp_file = None;
+
                     if let Some(ref player) = current_player {
                         player.stop();
                     }

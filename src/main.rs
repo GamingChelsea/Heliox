@@ -1,5 +1,7 @@
 use crate::audio::init_audio;
-use crate::model::{AudioPlayer, Config, CurrentTrackList, MediaControl, UiMediaEvent, apply_theme};
+use crate::model::{
+    AudioPlayer, Config, CurrentTrackList, MediaControl, UiMediaEvent, apply_theme,
+};
 use crate::player::{on_track_end, pause, play_next, play_prev, resume, stop, toggle_play};
 use crate::queue::QueueManager;
 use crate::router::{NavigationHistory, NavigationRoute};
@@ -24,6 +26,7 @@ pub mod model;
 pub mod player;
 pub mod queue;
 pub mod router;
+pub mod stream;
 pub mod ui;
 
 actions!(nav, [GoBack, GoForward]);
@@ -333,10 +336,8 @@ fn main() {
                     if let Err(err) =
                         ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
                             let theme_name = cx.global::<Config>().theme_name.clone();
-                            if let Some(theme) = ThemeRegistry::global(cx)
-                                .themes()
-                                .get(&theme_name)
-                                .cloned()
+                            if let Some(theme) =
+                                ThemeRegistry::global(cx).themes().get(&theme_name).cloned()
                             {
                                 apply_theme(&theme, cx);
                             }

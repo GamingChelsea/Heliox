@@ -54,6 +54,15 @@ pub fn playback_actions() -> Vec<PaletteAction> {
                 window.close_dialog(cx);
             },
         },
+        PaletteAction {
+            label: "Change Repeat Mode",
+            icon: IconName::Repeat,
+            keywords: &["crm", "repeat"],
+            execute: |command, window, cx| {
+                command.update(cx, |state, cx| state.set_query("crm ", window, cx));
+                window.refresh();
+            },
+        },
     ]
 }
 
@@ -112,7 +121,7 @@ pub fn app_actions(cx: &App) -> Vec<PaletteAction> {
         PaletteAction {
             label: "Toggle Discord RPC",
             icon: discord_icon,
-            keywords: &["dc", "toggle discord", "discord"],
+            keywords: &["dc", "discord"],
             execute: |_cmd, window, cx| {
                 crate::discord::toggle_discord_rpc(cx);
                 window.close_dialog(cx);

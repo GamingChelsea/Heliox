@@ -1,10 +1,10 @@
+use crate::{audio::AudioCommand, library::clean_title, queue::RepeatMode};
 use gpui_kit::{Global, SharedString, private::serde::Deserialize};
 use serde::Serialize;
 use std::{
     path::PathBuf,
     sync::{Arc, atomic::AtomicU64},
 };
-use crate::{audio::AudioCommand, library::clean_title, queue::RepeatMode};
 
 #[derive(Serialize, Deserialize, Clone)]
 pub struct Config {
@@ -20,7 +20,14 @@ pub struct Config {
     pub discord_rpc: bool,
     #[serde(default)]
     pub repeat_mode: RepeatMode,
+    #[serde(default = "default_corner_radius")]
+    pub corner_radius: f32,
 }
+
+fn default_corner_radius() -> f32 {
+    8.0
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -32,8 +39,20 @@ impl Default for Config {
             volume: 0.50,
             discord_rpc: false,
             repeat_mode: RepeatMode::default(),
+            corner_radius: default_corner_radius(),
         }
     }
+}
+
+pub fn apply_theme(theme: &std::rc::Rc<gpui_kit::component::ThemeConfig>, cx: &mut gpui_kit::App) {
+    let fallback_radius = cx.global::<Config>().corner_radius;
+    gpui_kit::component::Theme::update(cx, |current| {
+        current.apply_config(theme);
+        if theme.radius.is_none() {
+            current.radius = gpui_kit::px(fallback_radius);
+            current.radius_lg = gpui_kit::px((fallback_radius * 1.5).round());
+        }
+    });
 }
 
 impl Global for Config {}
@@ -153,4 +172,3 @@ impl MediaControl {
 }
 
 pub use crate::discord::{DiscordCommand, DiscordRpc};
-

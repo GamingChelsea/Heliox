@@ -1,5 +1,5 @@
 use crate::audio::init_audio;
-use crate::model::{AudioPlayer, Config, CurrentTrackList, MediaControl, UiMediaEvent};
+use crate::model::{AudioPlayer, Config, CurrentTrackList, MediaControl, UiMediaEvent, apply_theme};
 use crate::player::{on_track_end, pause, play_next, play_prev, resume, stop, toggle_play};
 use crate::queue::QueueManager;
 use crate::router::{NavigationHistory, NavigationRoute};
@@ -330,15 +330,15 @@ fn main() {
                     .detach();
 
                     // Theme
-                    let config = load_config();
                     if let Err(err) =
                         ThemeRegistry::watch_dir(PathBuf::from("./themes"), cx, move |cx| {
+                            let theme_name = cx.global::<Config>().theme_name.clone();
                             if let Some(theme) = ThemeRegistry::global(cx)
                                 .themes()
-                                .get(&config.theme_name)
+                                .get(&theme_name)
                                 .cloned()
                             {
-                                Theme::update(cx, |current| current.apply_config(&theme));
+                                apply_theme(&theme, cx);
                             }
                         })
                     {

@@ -55,11 +55,7 @@ impl RenderOnce for PlayerBar {
             IconName::Play
         };
         let repeat_mode = cx.global::<QueueManager>().repeat_mode;
-        let repeat_icon = match repeat_mode {
-            crate::queue::RepeatMode::Off => IconName::RepeatOff,
-            crate::queue::RepeatMode::Context => IconName::Repeat,
-            crate::queue::RepeatMode::Track => IconName::Repeat1,
-        };
+        let repeat_icon = repeat_mode.icon();
         let is_repeat_active = repeat_mode != crate::queue::RepeatMode::Off;
 
         if is_playing {

@@ -1,16 +1,32 @@
+use gpui_kit::{Global, assets::IconName};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
-
-use gpui_kit::Global;
+use strum::EnumIter;
 
 use crate::model::Track;
 
-#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize, Debug, EnumIter)]
 pub enum RepeatMode {
     #[default]
     Off,
-    Track,
     Context,
+    Track,
+}
+impl RepeatMode {
+    pub fn title(&self) -> String {
+        match &self {
+            Self::Off => String::from("Off"),
+            Self::Context => String::from("Original Playlist"),
+            Self::Track => String::from("Current Track"),
+        }
+    }
+    pub fn icon(&self) -> IconName {
+        match &self {
+            Self::Off => IconName::RepeatOff,
+            Self::Context => IconName::Repeat,
+            Self::Track => IconName::Repeat1,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default, Debug)]

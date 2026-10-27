@@ -1,4 +1,5 @@
-use crate::model::Config;
+use crate::model::{Config, apply_theme};
+use crate::queue::{QueueManager, RepeatMode};
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::save_config;
 use crate::ui::components::command_palette::actions::all_action_groups;
@@ -7,10 +8,11 @@ use gpui_kit::assets::IconName;
 use gpui_kit::base::{StyledExt, h_flex};
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
 use gpui_kit::component::tag::Tag;
-use gpui_kit::component::{ActiveTheme, Icon, Theme, ThemeRegistry, WindowExt, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, ThemeRegistry, WindowExt, v_flex};
 use gpui_kit::*;
 use std::cell::Cell;
 use std::rc::Rc;
+use strum::IntoEnumIterator;
 
 pub mod actions;
 pub mod modes;
@@ -114,6 +116,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
                 cmd = match mode {
                     PaletteMode::Themes(search) => configure_theme_mode(cmd, search, &themes, cx),
                     PaletteMode::Navigation(search) => configure_nav_mode(cmd, search, &routes, cx),
+                    PaletteMode::RepeatMode(search) => configure_repeat_mode(cmd, search, cx),
                     PaletteMode::Actions => configure_action_mode(cmd, command.clone(), cx),
                 };
 
@@ -164,7 +167,7 @@ fn configure_theme_mode(
                     .get(target_theme)
                     .cloned()
                 {
-                    Theme::update(cx, |t| t.apply_config(&theme));
+                    apply_theme(&theme, cx);
                     cx.update_global::<Config, _>(|config, _| {
                         config.theme_name = target_theme.clone();
                         let _ = save_config(config);
@@ -263,4 +266,35 @@ fn configure_action_mode(mut cmd: Command, command: Entity<CommandState>, cx: &A
             }
         }
     })
+}
+
+fn configure_repeat_mode(cmd: Command, search: &str, cx: &mut App) -> Command {
+    let current_repeat_mode = cx.global::<QueueManager>().repeat_mode;
+    let all_repeat_modes = RepeatMode::iter().collect::<Vec<RepeatMode>>();
+
+    let mut repeat_group = CommandGroup::new().label("Repeat Modes");
+    for mode in all_repeat_modes.clone() {
+        repeat_group = repeat_group.item(
+            CommandItem::new()
+                .label(mode.title())
+                .icon(mode.icon())
+                .checked(mode == current_repeat_mode),
+        );
+    }
+
+    let filtered_modes: Vec<RepeatMode> = all_repeat_modes
+        .iter()
+        .filter(|t| search.is_empty() || t.title().to_lowercase().contains(search))
+        .cloned()
+        .collect();
+
+    let modes_confirm = filtered_modes.clone();
+
+    cmd.filterable(false)
+        .group(repeat_group)
+        .on_confirm(move |index_path, _window, cx| {
+            if let Some(target_mode) = modes_confirm.get(index_path.row) {
+                cx.update_global::<QueueManager, _>(|qm, _cx| qm.repeat_mode = *target_mode);
+            }
+        })
 }

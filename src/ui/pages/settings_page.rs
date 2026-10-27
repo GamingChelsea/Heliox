@@ -1,18 +1,17 @@
+use crate::model::{AudioPlayer, Config, DiscordRpc, apply_theme};
+use crate::save_config;
 use gpui_kit::base::h_flex;
 use gpui_kit::base::input::InputState;
 use gpui_kit::component::Sizable;
 use gpui_kit::component::button::Button;
 use gpui_kit::component::input::Input;
 use gpui_kit::component::setting::{
-    SettingField, SettingGroup, SettingItem, SettingPage, Settings,
+    NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
 };
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry};
 use gpui_kit::*;
 use rfd::FileDialog;
-
-use crate::model::{AudioPlayer, Config, DiscordRpc};
-use crate::save_config;
 
 #[derive(IntoElement)]
 pub struct SettingsPage;
@@ -47,6 +46,7 @@ impl RenderOnce for SettingsPage {
                 .default_open(true)
                 .group(
                     SettingGroup::new()
+                        .pr(px(4.0))
                         .title("Appearance")
                         .item(
                             SettingItem::new(
@@ -58,7 +58,7 @@ impl RenderOnce for SettingsPage {
                                         if let Some(theme) =
                                             ThemeRegistry::global(cx).themes().get(&val).cloned()
                                         {
-                                            Theme::update(cx, |current| current.apply_config(&theme));
+                                            apply_theme(&theme, cx);
                                             cx.update_global::<Config, _>(|config, _cx| {
                                                 config.theme_name = SharedString::from(&*theme.name);
                                                 let _ = save_config(config);
@@ -71,6 +71,40 @@ impl RenderOnce for SettingsPage {
                         )
                         .item(
                             SettingItem::new(
+                                "Corner Radius",
+                                SettingField::number_input(
+                                    NumberFieldOptions {
+                                        min: 0.0,
+                                        max: 16.0,
+                                        step: 1.0,
+                                    },
+                                    |cx: &App| cx.global::<Config>().corner_radius as f64,
+                                    |val: f64, cx: &mut App| {
+                                        let radius = val as f32;
+                                        cx.update_global::<Config, _>(|config, _cx| {
+                                            config.corner_radius = radius;
+                                            let _ = save_config(config);
+                                        });
+                                        let theme_name = cx.global::<Config>().theme_name.clone();
+                                        if let Some(theme) = ThemeRegistry::global(cx)
+                                            .themes()
+                                            .get(&theme_name)
+                                            .cloned()
+                                        {
+                                            if theme.radius.is_none() {
+                                                Theme::update(cx, |current| {
+                                                    current.radius = px(radius);
+                                                    current.radius_lg = px((radius * 1.5).round());
+                                                });
+                                            }
+                                        }
+                                    },
+                                ),
+                            )
+                            .description("Default corner radius when the selected theme does not set it. (Default: 8)"),
+                        )
+                        .item(
+                            SettingItem::new(
                                 "Shorten Title",
                                 SettingField::switch(
                                     |cx: &App| cx.global::<Config>().shorten_titles,
@@ -80,12 +114,14 @@ impl RenderOnce for SettingsPage {
                                             let _ = save_config(config);
                                         });
                                     },
-                                ),
+                                )
+                                .p(px(4.0)),
                             )
                             .description("If this option is selected the title are shortened, which may result in unexpected behavior."),
                         ),
                 ).group(
                     SettingGroup::new()
+                        .pr(px(4.0))
                         .title("Connections")
                         .item(
                             SettingItem::new(
@@ -114,13 +150,17 @@ impl RenderOnce for SettingsPage {
                                             }
                                         }
                                     },
-                                ),
+                                )
+                                .p(px(4.0)),
                             )
                             .description("Toggle to display Heliox as an Discord activity."),
                         ),
                 )
                 .group(
-                    SettingGroup::new().title("Files").item(
+                    SettingGroup::new()
+                        .pr(px(4.0))
+                        .title("Files")
+                        .item(
                         SettingItem::new(
                             "Music Directory",
                             SettingField::render(move |options, _, _| {

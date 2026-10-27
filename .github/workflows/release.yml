@@ -5,6 +5,12 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+    inputs:
+      tag_name:
+        description: 'Release tag'
+        required: false
+        default: ''
+        type: string
 
 permissions:
   contents: write
@@ -70,6 +76,20 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
+      - name: Determine Tag
+        id: vars
+        shell: bash
+        run: |
+          if [ -n "${{ inputs.tag_name }}" ]; then
+            TAG="${{ inputs.tag_name }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            VERSION=$(cargo metadata --no-deps --format-version 1 | grep -o '"version":"[^"]*"' | head -n 1 | cut -d '"' -f 4)
+            TAG="v${VERSION}"
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
       - name: Build Release Binary
         shell: bash
         run: |
@@ -87,16 +107,22 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          cd target/${{ matrix.target }}/release
-          tar -czf ../../../${{ matrix.asset_name }} ${{ matrix.artifact_name }}
-          cd ../../..
+          mkdir -p staging
+          cp target/${{ matrix.target }}/release/${{ matrix.artifact_name }} staging/
+          cp -r themes staging/
+          tar -czf ${{ matrix.asset_name }} -C staging ${{ matrix.artifact_name }} themes
+          rm -rf staging
           sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
 
       - name: Package Artifacts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}
+          New-Item -ItemType Directory -Force -Path staging | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.artifact_name }}" -Destination staging/
+          Copy-Item -Recurse "themes" -Destination staging/
+          Compress-Archive -Path staging/* -DestinationPath ${{ matrix.asset_name }} -Force
+          Remove-Item -Recurse -Force staging
           $hash = (Get-FileHash -Path ${{ matrix.asset_name }} -Algorithm SHA256).Hash.ToLower()
           "$hash  ${{ matrix.asset_name }}" | Out-File -FilePath "${{ matrix.asset_name }}.sha256" -Encoding ascii
 
@@ -104,9 +130,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
         with:
+          tag_name: ${{ steps.vars.outputs.tag }}
           files: |
             ${{ matrix.asset_name }}
             ${{ matrix.asset_name }}.sha256
           draft: false
           prerelease: false
+          generate_release_notes: true
+
           generate_release_notes: true

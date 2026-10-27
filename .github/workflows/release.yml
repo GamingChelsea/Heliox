@@ -1,0 +1,112 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    name: Build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-22.04
+            artifact_name: heliox
+            asset_name: heliox-linux-x86_64.tar.gz
+            use_mold: true
+
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact_name: heliox.exe
+            asset_name: heliox-windows-x86_64.zip
+            use_lld: true
+
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            artifact_name: heliox
+            asset_name: heliox-macos-arm64.tar.gz
+
+          - target: x86_64-apple-darwin
+            os: macos-13
+            artifact_name: heliox
+            asset_name: heliox-macos-x86_64.tar.gz
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Linux dependencies & Mold Linker
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            libssl-dev \
+            libasound2-dev \
+            libxkbcommon-dev \
+            libx11-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libwayland-dev \
+            clang \
+            mold
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Rust Cache
+        uses: swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build Release Binary
+        shell: bash
+        run: |
+          RUSTFLAGS_EXTRA=""
+          if [ "${{ matrix.use_mold }}" = "true" ]; then
+            RUSTFLAGS_EXTRA="-C linker=clang -C link-arg=-fuse-ld=mold"
+          elif [ "${{ matrix.use_lld }}" = "true" ]; then
+            RUSTFLAGS_EXTRA="-C linker=rust-lld"
+          fi
+
+          echo "Using RUSTFLAGS: $RUSTFLAGS_EXTRA"
+          RUSTFLAGS="$RUSTFLAGS_EXTRA" cargo build --release --target ${{ matrix.target }}
+
+      - name: Package Artifacts (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cd target/${{ matrix.target }}/release
+          tar -czf ../../../${{ matrix.asset_name }} ${{ matrix.artifact_name }}
+          cd ../../..
+          sha256sum ${{ matrix.asset_name }} > ${{ matrix.asset_name }}.sha256
+
+      - name: Package Artifacts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Compress-Archive -Path target/${{ matrix.target }}/release/${{ matrix.artifact_name }} -DestinationPath ${{ matrix.asset_name }}
+          $hash = (Get-FileHash -Path ${{ matrix.asset_name }} -Algorithm SHA256).Hash.ToLower()
+          "$hash  ${{ matrix.asset_name }}" | Out-File -FilePath "${{ matrix.asset_name }}.sha256" -Encoding ascii
+
+      - name: Publish Release Assets
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/') || github.event_name == 'workflow_dispatch'
+        with:
+          files: |
+            ${{ matrix.asset_name }}
+            ${{ matrix.asset_name }}.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true

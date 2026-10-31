@@ -10,6 +10,7 @@ use crate::ui::components::player_bar::PlayerBar;
 use crate::ui::components::sidebar::AppSidebar;
 use crate::ui::pages::home_page::HomePage;
 use crate::ui::pages::local_library::LocalLibraryPage;
+use crate::ui::pages::search_page::SearchPage;
 use crate::ui::pages::settings_page::SettingsPage;
 use crate::ui::pages::test_page::TestPage;
 use gpui_kit::assets::AllAssets;
@@ -72,8 +73,7 @@ impl Render for MusicApp {
         div()
             .track_focus(&self.focus_handle)
             // Nav with Mouse Buttons
-            .capture_any_mouse_down(cx.listener(|this, event: &MouseDownEvent, window, cx| {
-                window.focus(&this.focus_handle, cx);
+            .capture_any_mouse_down(cx.listener(|_this, event: &MouseDownEvent, _window, cx| {
                 match event.button {
                     MouseButton::Navigate(NavigationDirection::Back) => {
                         cx.update_global::<NavigationHistory, _>(|history, _cx| history.go_back());
@@ -128,6 +128,7 @@ impl Render for MusicApp {
                             .justify_center()
                             .child(match current_route {
                                 NavigationRoute::Home => HomePage::new().into_any_element(),
+                                NavigationRoute::Search => SearchPage::new().into_any_element(),
                                 NavigationRoute::LocalLibrary => {
                                     LocalLibraryPage::new().into_any_element()
                                 }
@@ -165,7 +166,7 @@ fn main() {
                 KeyBinding::new("ctrl-shift-p", OpenCommandField, None),
                 KeyBinding::new("cmd-p", OpenCommandField, None),
                 KeyBinding::new("cmd-shift-p", OpenCommandField, None),
-                KeyBinding::new("space", ResumePause, None),
+                KeyBinding::new("space", ResumePause, Some("!Input")),
             ]);
 
             init_config(cx);

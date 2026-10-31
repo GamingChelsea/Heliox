@@ -5,6 +5,9 @@ use std::{
     sync::{LazyLock, RwLock},
 };
 
+const PARAMS_SONGS: &str = "EgWKAQIIAWoSEAQQAxAFEBAQChAJEBUQDhAR";
+const PARAMS_VIDEOS: &str = "EgWKAQIQAWoSEAQQAxAFEBAQChAJEBUQDhAR";
+
 const INNERTUBE_SEARCH_URL: &str = "https://music.youtube.com/youtubei/v1/search";
 const INNERTUBE_GUIDE_URL: &str = "https://music.youtube.com/youtubei/v1/guide";
 const INNERTUBE_PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
@@ -57,8 +60,74 @@ fn get_or_fetch_visitor_data() -> String {
     String::new()
 }
 
-pub fn search(query: &str) -> Result<Vec<Track>, Box<dyn std::error::Error + Send + Sync>> {
-    let body = json!({
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchFilter {
+    #[default]
+    All,
+    Songs,
+    Videos,
+}
+
+pub fn search_all(query: &str) -> Result<Vec<Track>, Box<dyn std::error::Error + Send + Sync>> {
+    search_filtered(query, SearchFilter::All)
+}
+
+pub fn search_filtered(
+    query: &str,
+    filter: SearchFilter,
+) -> Result<Vec<Track>, Box<dyn std::error::Error + Send + Sync>> {
+    match filter {
+        SearchFilter::Songs => search_with_params(query, Some(PARAMS_SONGS)),
+        SearchFilter::Videos => search_with_params(query, Some(PARAMS_VIDEOS)),
+        SearchFilter::All => {
+            let mut tracks = Vec::new();
+            let mut seen_ids = std::collections::HashSet::new();
+
+            // Fetch songs first
+            if let Ok(song_tracks) = search_with_params(query, Some(PARAMS_SONGS)) {
+                for t in song_tracks {
+                    if let TrackSource::Stream { ref id, .. } = t.source {
+                        if seen_ids.insert(id.clone()) {
+                            tracks.push(t);
+                        }
+                    }
+                }
+            }
+
+            // Fetch videos next
+            if let Ok(video_tracks) = search_with_params(query, Some(PARAMS_VIDEOS)) {
+                for t in video_tracks {
+                    if let TrackSource::Stream { ref id, .. } = t.source {
+                        if seen_ids.insert(id.clone()) {
+                            tracks.push(t);
+                        }
+                    }
+                }
+            }
+
+            // Fallback if both returned nothing
+            if tracks.is_empty() {
+                if let Ok(fallback_tracks) = search_with_params(query, None) {
+                    for t in fallback_tracks {
+                        if let TrackSource::Stream { ref id, .. } = t.source {
+                            if seen_ids.insert(id.clone()) {
+                                tracks.push(t);
+                            }
+                        }
+                    }
+                }
+            }
+
+            Ok(tracks)
+        }
+    }
+}
+
+fn search_with_params(
+    query: &str,
+    params: Option<&str>,
+) -> Result<Vec<Track>, Box<dyn std::error::Error + Send + Sync>> {
+    let mut body = json!({
         "context": {
             "client": {
                 "clientName": "WEB_REMIX",
@@ -68,8 +137,11 @@ pub fn search(query: &str) -> Result<Vec<Track>, Box<dyn std::error::Error + Sen
             }
         },
         "query": query,
-        "params": "EgWKAQIIAWoSEAQQAxAFEBAQChAJEBUQDhAR",
     });
+
+    if let Some(p) = params {
+        body["params"] = json!(p);
+    }
 
     let response: Value = HTTP_CLIENT
         .post(INNERTUBE_SEARCH_URL)

@@ -12,6 +12,7 @@ pub struct RouteMeta {
 #[derive(Clone, PartialEq, Debug, EnumIter)]
 pub enum NavigationRoute {
     Home,
+    Search,
     LocalLibrary,
     TestPage { message: String },
     Settings,
@@ -27,6 +28,11 @@ impl NavigationRoute {
             NavigationRoute::Home => RouteMeta {
                 name: "Home",
                 icon: IconName::House,
+                no_input: true,
+            },
+            NavigationRoute::Search => RouteMeta {
+                name: "Search",
+                icon: IconName::Search,
                 no_input: true,
             },
             NavigationRoute::LocalLibrary => RouteMeta {

@@ -17,14 +17,34 @@ pub struct PaletteAction {
 }
 
 pub fn search_actions() -> Vec<PaletteAction> {
-    vec![PaletteAction {
-        label: "Search on YouTube",
-        icon: IconName::Search,
-        keywords: &["yt", "search"],
-        execute: |cmd, window, cx| {
-            cmd.update(cx, |state, cx| state.set_query("search ", window, cx));
+    vec![
+        PaletteAction {
+            label: "Search on YouTube",
+            icon: IconName::Search,
+            keywords: &["yt", "search"],
+            execute: |cmd, window, cx| {
+                cmd.update(cx, |state, cx| state.set_query("search ", window, cx));
+            },
         },
-    }]
+        PaletteAction {
+            label: "Search only songs on YouTube",
+            icon: IconName::Search,
+            keywords: &["yt", "search songs"],
+            execute: |cmd, window, cx| {
+                cmd.update(cx, |state, cx| state.set_query("search:songs ", window, cx));
+            },
+        },
+        PaletteAction {
+            label: "Search only videos on YouTube",
+            icon: IconName::Search,
+            keywords: &["yt", "search videos"],
+            execute: |cmd, window, cx| {
+                cmd.update(cx, |state, cx| {
+                    state.set_query("search:videos ", window, cx)
+                });
+            },
+        },
+    ]
 }
 
 pub fn playback_actions() -> Vec<PaletteAction> {

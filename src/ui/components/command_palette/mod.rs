@@ -1,5 +1,5 @@
 use crate::model::{Config, Track, apply_theme};
-use crate::providers::youtube;
+use crate::providers::youtube::{self, SearchFilter};
 use crate::queue::{QueueManager, RepeatMode};
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::save_config;
@@ -8,6 +8,7 @@ use crate::ui::components::command_palette::modes::PaletteMode;
 use gpui_kit::assets::IconName;
 use gpui_kit::base::{StyledExt, h_flex};
 use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandState};
+use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, Icon, ThemeRegistry, WindowExt, v_flex};
 use gpui_kit::*;
@@ -128,9 +129,10 @@ pub fn open(window: &mut Window, cx: &mut App) {
                     });
 
                 cmd = match mode {
-                    PaletteMode::Search(search) => configure_search_mode(
+                    PaletteMode::Search(search, filter) => configure_search_mode(
                         cmd,
                         search,
+                        filter,
                         search_state.clone(),
                         search_version.clone(),
                         window,
@@ -142,13 +144,35 @@ pub fn open(window: &mut Window, cx: &mut App) {
                     PaletteMode::Actions => configure_action_mode(cmd, command.clone(), cx),
                 };
 
-                content.child(cmd.empty(|_, _, _| {
-                    v_flex()
-                        .items_center()
-                        .gap_2()
-                        .py_4()
-                        .child(Icon::new(IconName::Search).size_8())
-                        .child("No results found.")
+                let is_search_loading = if let PaletteMode::Search(..) = mode {
+                    search_state.borrow().is_loading
+                } else {
+                    false
+                };
+
+                content.child(cmd.empty(move |_, _, cx| {
+                    if is_search_loading {
+                        v_flex()
+                            .items_center()
+                            .justify_center()
+                            .gap_2()
+                            .py_6()
+                            .child(Spinner::new())
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child("Searching YouTube..."),
+                            )
+                    } else {
+                        v_flex()
+                            .items_center()
+                            .justify_center()
+                            .gap_2()
+                            .py_4()
+                            .child(Icon::new(IconName::Search).size_8())
+                            .child("No results found.")
+                    }
                 }))
             })
     });
@@ -324,6 +348,7 @@ fn configure_repeat_mode(cmd: Command, search: &str, cx: &mut App) -> Command {
 fn configure_search_mode(
     cmd: Command,
     search: &str,
+    filter: SearchFilter,
     search_state: Rc<RefCell<SearchState>>,
     search_version: Rc<AtomicU64>,
     _window: &mut Window,
@@ -356,7 +381,9 @@ fn configure_search_mode(
 
                     let results = cx
                         .background_executor()
-                        .spawn(async move { youtube::search(&query_to_fetch).unwrap_or_default() })
+                        .spawn(async move {
+                            youtube::search_filtered(&query_to_fetch, filter).unwrap_or_default()
+                        })
                         .await;
 
                     if version_clone.load(Ordering::SeqCst) == current_v {

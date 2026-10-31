@@ -94,6 +94,7 @@ pub fn load_local_library<T: 'static>(cx: &mut Context<T>) {
                 list.source = Some(TrackListSource::LocalLibrary);
                 list.tracks = Some(tracks);
             });
+            cx.refresh_windows();
         });
     })
     .detach();

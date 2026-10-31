@@ -308,6 +308,10 @@ pub fn init_audio(
 
             match command {
                 AudioCommand::Play(path) => {
+                    if let Some(player) = current_player.take() {
+                        player.stop();
+                    }
+
                     if let Some(state) = current_stream_state.take() {
                         state.is_cancelled.store(true, Ordering::Relaxed);
                     }
@@ -336,6 +340,10 @@ pub fn init_audio(
                     hint_extension,
                     content_length,
                 } => {
+                    if let Some(player) = current_player.take() {
+                        player.stop();
+                    }
+
                     if let Some(state) = current_stream_state.take() {
                         state.is_cancelled.store(true, Ordering::Relaxed);
                     }

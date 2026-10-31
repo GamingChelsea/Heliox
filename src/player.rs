@@ -1,6 +1,7 @@
 use crate::{
     audio::AudioCommand,
-    model::{AudioPlayer, Config, CurrentTrackList, DiscordRpc, MediaControl, Track},
+    model::{AudioPlayer, Config, CurrentTrackList, DiscordRpc, MediaControl, Track, TrackSource},
+    providers::youtube,
     queue::QueueManager,
 };
 use gpui_kit::*;
@@ -11,7 +12,50 @@ pub fn play_track(track: Track, cx: &mut App) {
         list.selected_id = Some(track_id);
     });
     cx.update_global::<AudioPlayer, _>(|player, _cx| {
-        let _ = player.sender.send(AudioCommand::Play(track.path.clone()));
+        match &track.source {
+            TrackSource::Local(path) => {
+                let _ = player.sender.send(AudioCommand::Play(path.clone()));
+            }
+            TrackSource::Stream {
+                direct_url: Some(url),
+                hint_extension,
+                ..
+            } => {
+                let _ = player.sender.send(AudioCommand::PlayStream {
+                    url: url.clone(),
+                    hint_extension: hint_extension.clone(),
+                    content_length: None,
+                });
+            }
+            TrackSource::Stream {
+                direct_url: None,
+                id,
+                provider,
+                hint_extension,
+            } => {
+                let id_clone = id.clone();
+                let provider_clone = provider.clone();
+                let ext_clone = hint_extension.clone();
+                let sender_clone = player.sender.clone();
+
+                std::thread::spawn(move || {
+                    if provider_clone == "youtube" {
+                        match youtube::get_stream_url(&id_clone) {
+                            Ok((url, content_length)) => {
+                                let _ = sender_clone.send(AudioCommand::PlayStream {
+                                    url,
+                                    hint_extension: ext_clone,
+                                    content_length,
+                                });
+                            }
+                            Err(err) => {
+                                tracing::error!(?err, "Failed to resolve YouTube stream URL");
+                            }
+                        }
+                    }
+                });
+            }
+        }
         player.current_track = Some(track.clone());
         player.is_playing = true;
     });

@@ -1,4 +1,5 @@
 pub enum PaletteMode<'a> {
+    Search(&'a str),
     Themes(&'a str),
     Navigation(&'a str),
     RepeatMode(&'a str),
@@ -7,7 +8,9 @@ pub enum PaletteMode<'a> {
 impl<'a> PaletteMode<'a> {
     pub fn parse(query: &'a str) -> Self {
         let trimmed = query.trim_start();
-        if let Some(rest) = trimmed.strip_prefix("ct ") {
+        if let Some(rest) = trimmed.strip_prefix("search ") {
+            Self::Search(rest.trim())
+        } else if let Some(rest) = trimmed.strip_prefix("ct ") {
             Self::Themes(rest.trim())
         } else if let Some(rest) = trimmed.strip_prefix("nav ") {
             Self::Navigation(rest.trim())

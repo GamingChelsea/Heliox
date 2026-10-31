@@ -16,6 +16,17 @@ pub struct PaletteAction {
     pub execute: fn(&Entity<CommandState>, &mut Window, &mut App),
 }
 
+pub fn search_actions() -> Vec<PaletteAction> {
+    vec![PaletteAction {
+        label: "Search on YouTube",
+        icon: IconName::Search,
+        keywords: &["yt", "search"],
+        execute: |cmd, window, cx| {
+            cmd.update(cx, |state, cx| state.set_query("search ", window, cx));
+        },
+    }]
+}
+
 pub fn playback_actions() -> Vec<PaletteAction> {
     vec![
         PaletteAction {
@@ -30,7 +41,7 @@ pub fn playback_actions() -> Vec<PaletteAction> {
         PaletteAction {
             label: "Play the previous track",
             icon: IconName::SkipBack,
-            keywords: &["next"],
+            keywords: &["prev", "previous"],
             execute: |_cmd, window, cx| {
                 play_prev(cx);
                 window.close_dialog(cx);
@@ -39,7 +50,7 @@ pub fn playback_actions() -> Vec<PaletteAction> {
         PaletteAction {
             label: "Play the next track",
             icon: IconName::SkipForward,
-            keywords: &["next"],
+            keywords: &["next", "advance"],
             execute: |_cmd, window, cx| {
                 play_next(cx);
                 window.close_dialog(cx);
@@ -140,6 +151,7 @@ pub fn app_actions(cx: &App) -> Vec<PaletteAction> {
 
 pub fn all_action_groups(cx: &App) -> Vec<(&'static str, Vec<PaletteAction>)> {
     vec![
+        ("Search", search_actions()),
         ("Playback", playback_actions()),
         ("Navigation", navigation_actions()),
         ("App", app_actions(cx)),

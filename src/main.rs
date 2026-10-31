@@ -24,6 +24,7 @@ pub mod discord;
 pub mod library;
 pub mod model;
 pub mod player;
+pub mod providers;
 pub mod queue;
 pub mod router;
 pub mod stream;

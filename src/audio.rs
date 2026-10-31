@@ -32,7 +32,11 @@ static CODEC_REGISTRY: LazyLock<CodecRegistry> = LazyLock::new(|| {
 
 pub enum AudioCommand {
     Play(std::path::PathBuf),
-    PlayStream { url: String, hint_extension: String },
+    PlayStream {
+        url: String,
+        hint_extension: String,
+        content_length: Option<u64>,
+    },
     ResumePause,
     Resume,
     Pause,
@@ -330,6 +334,7 @@ pub fn init_audio(
                 AudioCommand::PlayStream {
                     url,
                     hint_extension,
+                    content_length,
                 } => {
                     if let Some(state) = current_stream_state.take() {
                         state.is_cancelled.store(true, Ordering::Relaxed);
@@ -347,6 +352,7 @@ pub fn init_audio(
 
                     let state = Arc::new(StreamState {
                         downloaded_bytes: AtomicUsize::new(0),
+                        total_bytes: content_length,
                         is_finished: AtomicBool::new(false),
                         is_cancelled: AtomicBool::new(false),
                     });
@@ -362,32 +368,93 @@ pub fn init_audio(
                             .open(&downloaded_path)
                             .unwrap();
 
-                        let mut response = match reqwest::blocking::get(&url) {
-                            Ok(res) => res,
-                            Err(err) => {
-                                tracing::error!(?err, "Download failed");
-                                downloaded_state.is_finished.store(true, Ordering::Relaxed);
-                                return;
-                            }
-                        };
+                        let client = reqwest::blocking::Client::new();
+                        let user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
-                        let mut buffer = [0u8; 8192];
-                        loop {
-                            if downloaded_state.is_cancelled.load(Ordering::Relaxed) {
-                                break;
-                            }
+                        if let Some(total_len) = content_length {
+                            const CHUNK_SIZE: u64 = 512 * 1024;
+                            let mut start = 0u64;
+                            let mut buffer = [0u8; 16384];
 
-                            match response.read(&mut buffer) {
-                                // Download Finished
-                                Ok(0) => break,
-                                Ok(n) => {
-                                    writer.write_all(&buffer[..n]).unwrap();
-                                    writer.flush().unwrap();
-                                    downloaded_state
-                                        .downloaded_bytes
-                                        .fetch_add(n, Ordering::Relaxed);
+                            while start < total_len {
+                                if downloaded_state.is_cancelled.load(Ordering::Relaxed) {
+                                    break;
                                 }
-                                Err(_) => break,
+                                let end = (start + CHUNK_SIZE - 1).min(total_len - 1);
+                                let chunk_url = format!("{}&range={}-{}", url, start, end);
+
+                                let mut response = match client
+                                    .get(&chunk_url)
+                                    .header("User-Agent", user_agent)
+                                    .send()
+                                {
+                                    Ok(res) => res,
+                                    Err(err) => {
+                                        tracing::error!(?err, "Chunk download failed");
+                                        break;
+                                    }
+                                };
+
+                                let mut chunk_ok = true;
+                                loop {
+                                    if downloaded_state.is_cancelled.load(Ordering::Relaxed) {
+                                        chunk_ok = false;
+                                        break;
+                                    }
+                                    match response.read(&mut buffer) {
+                                        Ok(0) => break,
+                                        Ok(n) => {
+                                            if writer.write_all(&buffer[..n]).is_err() {
+                                                chunk_ok = false;
+                                                break;
+                                            }
+                                            let _ = writer.flush();
+                                            downloaded_state
+                                                .downloaded_bytes
+                                                .fetch_add(n, Ordering::Relaxed);
+                                        }
+                                        Err(_) => {
+                                            chunk_ok = false;
+                                            break;
+                                        }
+                                    }
+                                }
+                                if !chunk_ok {
+                                    break;
+                                }
+                                start = end + 1;
+                            }
+                        } else {
+                            let mut response = match client
+                                .get(&url)
+                                .header("User-Agent", user_agent)
+                                .send()
+                            {
+                                Ok(res) => res,
+                                Err(err) => {
+                                    tracing::error!(?err, "Download failed");
+                                    downloaded_state.is_finished.store(true, Ordering::Relaxed);
+                                    return;
+                                }
+                            };
+
+                            let mut buffer = [0u8; 8192];
+                            loop {
+                                if downloaded_state.is_cancelled.load(Ordering::Relaxed) {
+                                    break;
+                                }
+
+                                match response.read(&mut buffer) {
+                                    Ok(0) => break,
+                                    Ok(n) => {
+                                        let _ = writer.write_all(&buffer[..n]);
+                                        let _ = writer.flush();
+                                        downloaded_state
+                                            .downloaded_bytes
+                                            .fetch_add(n, Ordering::Relaxed);
+                                    }
+                                    Err(_) => break,
+                                }
                             }
                         }
                         downloaded_state.is_finished.store(true, Ordering::Relaxed);
@@ -399,8 +466,8 @@ pub fn init_audio(
 
                     progress_for_thread.store(0, Ordering::Relaxed);
 
-                    // Wait 256kb or download is finished
-                    while state.downloaded_bytes.load(Ordering::Relaxed) < 256 * 1024
+                    // Wait 64kb or download is finished
+                    while state.downloaded_bytes.load(Ordering::Relaxed) < 64 * 1024
                         && !state.is_finished.load(Ordering::Relaxed)
                     {
                         if state.is_cancelled.load(Ordering::Relaxed) {

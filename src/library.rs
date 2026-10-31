@@ -53,7 +53,7 @@ pub fn parse_track(path: &Path, options: ParseOptions) -> Option<Track> {
         artist,
         album,
         duration_secs,
-        path: path.to_path_buf(),
+        source: crate::model::TrackSource::Local(path.to_path_buf()),
     })
 }
 

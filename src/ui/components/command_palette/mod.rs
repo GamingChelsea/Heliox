@@ -1,4 +1,5 @@
-use crate::model::{Config, apply_theme};
+use crate::model::{Config, Track, apply_theme};
+use crate::providers::youtube;
 use crate::queue::{QueueManager, RepeatMode};
 use crate::router::{NavigationHistory, NavigationRoute};
 use crate::save_config;
@@ -10,16 +11,27 @@ use gpui_kit::component::command::{Command, CommandGroup, CommandItem, CommandSt
 use gpui_kit::component::tag::Tag;
 use gpui_kit::component::{ActiveTheme, Icon, ThemeRegistry, WindowExt, v_flex};
 use gpui_kit::*;
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 use strum::IntoEnumIterator;
 
 pub mod actions;
 pub mod modes;
 
+#[derive(Default, Clone)]
+struct SearchState {
+    last_query: String,
+    results: Vec<Track>,
+    is_loading: bool,
+}
+
 pub fn open(window: &mut Window, cx: &mut App) {
     let command_state = cx.new(|cx| CommandState::new(window, cx));
     let focus_on_mount = Rc::new(Cell::new(true));
+    let search_state = Rc::new(RefCell::new(SearchState::default()));
+    let search_version = Rc::new(AtomicU64::new(0));
 
     let available_themes: Vec<SharedString> = ThemeRegistry::global(cx)
         .sorted_themes()
@@ -37,6 +49,8 @@ pub fn open(window: &mut Window, cx: &mut App) {
         let focus_on_mount = focus_on_mount.clone();
         let themes = themes_for_closure.clone();
         let routes = pages_for_closure.clone();
+        let search_state = search_state.clone();
+        let search_version = search_version.clone();
 
         dialog
             .close_button(false)
@@ -63,7 +77,7 @@ pub fn open(window: &mut Window, cx: &mut App) {
                     .on_query(|_query, window, _cx| {
                         window.refresh();
                     })
-                    .placeholder("Type a command ('ct ' for themes, 'nav ' for pages)...")
+                    .placeholder("Type a command ('ct ' for themes, 'nav ' for pages, 'search ' for music)...")
                     .header(|state, _, cx| {
                         h_flex()
                             .h_6()
@@ -114,6 +128,14 @@ pub fn open(window: &mut Window, cx: &mut App) {
                     });
 
                 cmd = match mode {
+                    PaletteMode::Search(search) => configure_search_mode(
+                        cmd,
+                        search,
+                        search_state.clone(),
+                        search_version.clone(),
+                        window,
+                        cx,
+                    ),
                     PaletteMode::Themes(search) => configure_theme_mode(cmd, search, &themes, cx),
                     PaletteMode::Navigation(search) => configure_nav_mode(cmd, search, &routes, cx),
                     PaletteMode::RepeatMode(search) => configure_repeat_mode(cmd, search, cx),
@@ -295,6 +317,90 @@ fn configure_repeat_mode(cmd: Command, search: &str, cx: &mut App) -> Command {
         .on_confirm(move |index_path, _window, cx| {
             if let Some(target_mode) = modes_confirm.get(index_path.row) {
                 cx.update_global::<QueueManager, _>(|qm, _cx| qm.repeat_mode = *target_mode);
+            }
+        })
+}
+
+fn configure_search_mode(
+    cmd: Command,
+    search: &str,
+    search_state: Rc<RefCell<SearchState>>,
+    search_version: Rc<AtomicU64>,
+    _window: &mut Window,
+    cx: &mut App,
+) -> Command {
+    let search_trimmed = search.trim().to_string();
+
+    {
+        let mut state = search_state.borrow_mut();
+        if state.last_query != search_trimmed {
+            state.last_query = search_trimmed.clone();
+            state.is_loading = !search_trimmed.is_empty();
+
+            if search_trimmed.is_empty() {
+                state.results.clear();
+            } else {
+                let current_v = search_version.fetch_add(1, Ordering::SeqCst) + 1;
+                let state_clone = search_state.clone();
+                let version_clone = search_version.clone();
+                let query_to_fetch = search_trimmed.clone();
+
+                cx.spawn(async move |cx: &mut AsyncApp| {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(300))
+                        .await;
+
+                    if version_clone.load(Ordering::SeqCst) != current_v {
+                        return;
+                    }
+
+                    let results = cx
+                        .background_executor()
+                        .spawn(async move { youtube::search(&query_to_fetch).unwrap_or_default() })
+                        .await;
+
+                    if version_clone.load(Ordering::SeqCst) == current_v {
+                        let _ = cx.update(|cx| {
+                            let mut state = state_clone.borrow_mut();
+                            state.results = results;
+                            state.is_loading = false;
+                            cx.refresh_windows();
+                        });
+                    }
+                })
+                .detach();
+            }
+        }
+    }
+
+    let (tracks, is_loading) = {
+        let state = search_state.borrow();
+        (state.results.clone(), state.is_loading)
+    };
+
+    let label = if is_loading {
+        "YouTube Search (Loading...)"
+    } else {
+        "YouTube Search"
+    };
+
+    let mut search_group = CommandGroup::new().label(label);
+    for track in &tracks {
+        let display_label = format!("{} • {}", track.title, track.artist);
+        search_group = search_group.item(
+            CommandItem::new()
+                .label(display_label)
+                .icon(IconName::Music),
+        );
+    }
+
+    let tracks_confirm = tracks.clone();
+
+    cmd.filterable(false)
+        .group(search_group)
+        .on_confirm(move |index_path, _window, cx| {
+            if let Some(track) = tracks_confirm.get(index_path.row) {
+                crate::player::play_track(track.clone(), cx);
             }
         })
 }

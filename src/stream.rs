@@ -11,6 +11,7 @@ use symphonia::core::io::MediaSource;
 
 pub struct StreamState {
     pub downloaded_bytes: AtomicUsize,
+    pub total_bytes: Option<u64>,
     pub is_finished: AtomicBool,
     pub is_cancelled: AtomicBool,
 }
@@ -27,11 +28,17 @@ impl ProgressiveReader {
 
 impl MediaSource for ProgressiveReader {
     fn is_seekable(&self) -> bool {
-        true
+        self.state.total_bytes.is_some() || self.state.is_finished.load(Ordering::Relaxed)
     }
 
     fn byte_len(&self) -> Option<u64> {
-        None
+        self.state.total_bytes.or_else(|| {
+            if self.state.is_finished.load(Ordering::Relaxed) {
+                Some(self.state.downloaded_bytes.load(Ordering::Relaxed) as u64)
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -64,6 +71,17 @@ impl Read for ProgressiveReader {
 
 impl Seek for ProgressiveReader {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {
-        self.file.seek(pos)
+        let target = match pos {
+            std::io::SeekFrom::End(offset) => {
+                if let Some(total) = self.state.total_bytes {
+                    let target_pos = (total as i64 + offset).max(0) as u64;
+                    std::io::SeekFrom::Start(target_pos)
+                } else {
+                    pos
+                }
+            }
+            other => other,
+        };
+        self.file.seek(target)
     }
 }

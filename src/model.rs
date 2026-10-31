@@ -2,7 +2,7 @@ use crate::{audio::AudioCommand, library::clean_title, queue::RepeatMode};
 use gpui_kit::{Global, SharedString, private::serde::Deserialize};
 use serde::Serialize;
 use std::{
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicU64},
 };
 
@@ -76,6 +76,17 @@ impl AudioPlayer {
 
 impl Global for AudioPlayer {}
 
+#[derive(Clone, PartialEq, Debug)]
+pub enum TrackSource {
+    Local(std::path::PathBuf),
+    Stream {
+        provider: String,
+        id: String,
+        direct_url: Option<String>,
+        hint_extension: String,
+    },
+}
+
 #[derive(Clone, Debug)]
 pub struct Track {
     pub id: u64,
@@ -83,9 +94,15 @@ pub struct Track {
     pub artist: String,
     pub album: String,
     pub duration_secs: u32,
-    pub path: std::path::PathBuf,
+    pub source: TrackSource,
 }
 impl Track {
+    pub fn local_path(&self) -> Option<&Path> {
+        match &self.source {
+            TrackSource::Local(path) => Some(path.as_path()),
+            TrackSource::Stream { .. } => None,
+        }
+    }
     pub fn display_title(&self, shorten: bool) -> String {
         if shorten {
             clean_title(&self.title, &self.artist)

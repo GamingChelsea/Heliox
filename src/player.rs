@@ -1,27 +1,29 @@
 use crate::{
     audio::AudioCommand,
-    model::{AudioPlayer, Config, CurrentTrackList, DiscordRpc, MediaControl, Track, TrackSource},
+    model::{AudioPlayer, Config, CurrentTrackList, DiscordRpc, Track, TrackSource},
     providers::youtube,
-    queue::QueueManager,
+    queue::{QueueManager, RepeatMode},
 };
-use gpui_kit::*;
+use nsh_core::prelude::*;
 
-pub fn play_track(track: Track, cx: &mut App) {
+pub fn play_track(track: Track) {
     let track_id = track.id;
-    cx.update_global::<CurrentTrackList, _>(|list, _cx| {
+    global::<CurrentTrackList>().update(|list| {
         list.selected_id = Some(track_id);
     });
-    cx.update_global::<AudioPlayer, _>(|player, _cx| {
+
+    let sender = global::<AudioPlayer>().get_untracked().sender.clone();
+    if let Some(ref sender) = sender {
         match &track.source {
             TrackSource::Local(path) => {
-                let _ = player.sender.send(AudioCommand::Play(path.clone()));
+                let _ = sender.send(AudioCommand::Play(path.clone()));
             }
             TrackSource::Stream {
                 direct_url: Some(url),
                 hint_extension,
                 ..
             } => {
-                let _ = player.sender.send(AudioCommand::PlayStream {
+                let _ = sender.send(AudioCommand::PlayStream {
                     url: url.clone(),
                     hint_extension: hint_extension.clone(),
                     content_length: None,
@@ -36,7 +38,7 @@ pub fn play_track(track: Track, cx: &mut App) {
                 let id_clone = id.clone();
                 let provider_clone = provider.clone();
                 let ext_clone = hint_extension.clone();
-                let sender_clone = player.sender.clone();
+                let sender_clone = sender.clone();
 
                 std::thread::spawn(move || {
                     if provider_clone == "youtube" {
@@ -56,139 +58,161 @@ pub fn play_track(track: Track, cx: &mut App) {
                 });
             }
         }
+    }
+
+    global::<AudioPlayer>().update(|player| {
         player.current_track = Some(track.clone());
         player.is_playing = true;
     });
-    cx.update_global::<MediaControl, _>(|mc, _cx| {
-        mc.update_track(&track);
-    });
-    if cx.global::<Config>().discord_rpc {
-        cx.update_global::<DiscordRpc, _>(|rpc, _cx| rpc.update_track(&track));
+
+    crate::update_media_controls_track(&track);
+
+    if global::<Config>().get_untracked().discord_rpc {
+        global::<DiscordRpc>().get_untracked().update_track(&track);
     }
-    cx.refresh_windows();
 }
 
-pub fn toggle_play(cx: &mut App) {
-    let is_playing = cx.global::<AudioPlayer>().is_playing;
+pub fn toggle_play() {
+    let is_playing = global::<AudioPlayer>().get_untracked().is_playing;
     if is_playing {
-        pause(cx);
+        pause();
     } else {
-        resume(cx);
+        resume();
     }
 }
 
-pub fn resume(cx: &mut App) {
-    let current_track = cx.update_global::<AudioPlayer, _>(|player, _cx| {
-        let _ = player.sender.send(AudioCommand::Resume);
+pub fn resume() {
+    let mut current_track = None;
+    global::<AudioPlayer>().update(|player| {
+        if let Some(ref s) = player.sender {
+            let _ = s.send(AudioCommand::Resume);
+        }
         player.is_playing = true;
-        player.current_track.clone()
+        current_track = player.current_track.clone();
     });
-    cx.update_global::<MediaControl, _>(|mc, _cx| {
-        mc.set_playback(true);
-    });
-    if cx.global::<Config>().discord_rpc {
+
+    crate::update_media_controls_playback(true);
+
+    if global::<Config>().get_untracked().discord_rpc {
         if let Some(track) = current_track {
-            cx.update_global::<DiscordRpc, _>(|rpc, _cx| rpc.update_track(&track));
+            global::<DiscordRpc>().get_untracked().update_track(&track);
         }
     }
-    cx.refresh_windows();
 }
 
-pub fn pause(cx: &mut App) {
-    let current_track = cx.update_global::<AudioPlayer, _>(|player, _cx| {
-        let _ = player.sender.send(AudioCommand::Pause);
+pub fn pause() {
+    let mut current_track = None;
+    global::<AudioPlayer>().update(|player| {
+        if let Some(ref s) = player.sender {
+            let _ = s.send(AudioCommand::Pause);
+        }
         player.is_playing = false;
-        player.current_track.clone()
+        current_track = player.current_track.clone();
     });
-    cx.update_global::<MediaControl, _>(|mc, _cx| {
-        mc.set_playback(false);
-    });
-    if cx.global::<Config>().discord_rpc {
+
+    crate::update_media_controls_playback(false);
+
+    if global::<Config>().get_untracked().discord_rpc {
         if let Some(track) = current_track {
-            cx.update_global::<DiscordRpc, _>(|rpc, _cx| rpc.set_paused(&track));
-        } else {
-            cx.update_global::<DiscordRpc, _>(|rpc, _cx| rpc.set_idle());
+            global::<DiscordRpc>().get_untracked().set_paused(&track);
         }
     }
-    cx.refresh_windows();
 }
 
-pub fn stop(cx: &mut App) {
-    cx.update_global::<AudioPlayer, _>(|player, _cx| {
-        let _ = player.sender.send(AudioCommand::Stop);
+pub fn stop() {
+    global::<AudioPlayer>().update(|player| {
+        if let Some(ref s) = player.sender {
+            let _ = s.send(AudioCommand::Stop);
+        }
         player.is_playing = false;
+        player.current_track = None;
     });
-    cx.update_global::<MediaControl, _>(|mc, _cx| {
-        let _ = mc.0.set_playback(souvlaki::MediaPlayback::Stopped);
-    });
-    if cx.global::<Config>().discord_rpc {
-        cx.update_global::<DiscordRpc, _>(|rpc, _cx| rpc.set_idle());
-    }
-    cx.refresh_windows();
-}
 
-pub fn play_context(tracks: Vec<Track>, index: usize, cx: &mut App) {
-    let track_to_play =
-        cx.update_global::<QueueManager, _>(|qm, _cx| qm.play_from_context(tracks, index));
+    crate::update_media_controls_playback(false);
 
-    if let Some(track) = track_to_play {
-        play_track(track, cx);
+    if global::<Config>().get_untracked().discord_rpc {
+        global::<DiscordRpc>().get_untracked().set_idle();
     }
 }
 
-pub fn play_next(cx: &mut App) {
-    let current_track = cx.global::<AudioPlayer>().current_track.clone();
-
-    let next_track = cx.update_global::<QueueManager, _>(|qm, _cx| qm.advance_next(current_track));
+pub fn play_next() {
+    let current_track = global::<AudioPlayer>()
+        .get_untracked()
+        .current_track
+        .clone();
+    let mut next_track = None;
+    global::<QueueManager>().update(|qm| {
+        next_track = qm.advance_next(current_track);
+    });
 
     if let Some(track) = next_track {
-        play_track(track, cx);
+        play_track(track);
     } else {
-        stop(cx);
+        stop();
     }
 }
 
-pub fn on_track_end(cx: &mut App) {
-    let current_track = cx.global::<AudioPlayer>().current_track.clone();
+pub fn play_prev() {
+    let progress_ms = global::<AudioPlayer>()
+        .get_untracked()
+        .progress_ms
+        .load(std::sync::atomic::Ordering::Relaxed);
 
-    let next_track = cx.update_global::<QueueManager, _>(|qm, _cx| qm.advance_auto(current_track));
-
-    if let Some(track) = next_track {
-        play_track(track, cx);
-    } else {
-        stop(cx);
-    }
-}
-
-pub fn play_prev(cx: &mut App) {
-    let (current_track, progress_ms) = cx.read_global::<AudioPlayer, _>(|p, _cx| {
-        (
-            p.current_track.clone(),
-            p.progress_ms.load(std::sync::atomic::Ordering::Relaxed),
-        )
-    });
-
+    // If more than 3 seconds in, restart the track
     if progress_ms > 3000 {
-        cx.global::<AudioPlayer>()
-            .sender
-            .send(AudioCommand::Seek(0.0))
-            .ok();
+        if let Some(ref s) = global::<AudioPlayer>().get_untracked().sender {
+            let _ = s.send(AudioCommand::Seek(0.0));
+        }
         return;
     }
 
-    let prev_track =
-        cx.update_global::<QueueManager, _>(|qm, _cx| qm.advance_previous(current_track));
-
+    let mut prev_track = None;
+    global::<QueueManager>().update(|qm| {
+        prev_track = qm.previous();
+    });
     if let Some(track) = prev_track {
-        play_track(track, cx);
+        play_track(track);
     }
 }
 
-pub fn toggle_repeat(cx: &mut App) {
-    let new_mode = cx.update_global::<QueueManager, _>(|qm, _cx| qm.cycle_repeat());
-    cx.update_global::<Config, _>(|config, _cx| {
-        config.repeat_mode = new_mode;
-        let _ = crate::save_config(config);
+pub fn toggle_repeat() {
+    let mut new_mode = RepeatMode::Off;
+    global::<QueueManager>().update(|qm| {
+        new_mode = qm.cycle_repeat();
     });
-    cx.refresh_windows();
+    global::<Config>().update(|c| {
+        c.repeat_mode = new_mode;
+    });
+    crate::save_config(&global::<Config>().get_untracked());
+}
+
+pub fn toggle_shuffle() {
+    global::<QueueManager>().update(|qm| {
+        qm.toggle_shuffle();
+    });
+}
+
+pub fn play_context(tracks: Vec<Track>, index: usize) {
+    let mut track = None;
+    global::<QueueManager>().update(|qm| {
+        track = qm.play_from_context(tracks, index);
+    });
+    if let Some(track) = track {
+        play_track(track);
+    }
+}
+
+pub fn on_track_end() {
+    let repeat_mode = global::<QueueManager>().get_untracked().repeat_mode;
+    if repeat_mode == RepeatMode::Track {
+        if let Some(track) = global::<AudioPlayer>()
+            .get_untracked()
+            .current_track
+            .clone()
+        {
+            play_track(track);
+            return;
+        }
+    }
+    play_next();
 }

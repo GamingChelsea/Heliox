@@ -1,148 +1,150 @@
-use crate::model::{Config, CurrentTrackList, Track};
-use crate::player::play_context;
-use gpui_kit::base::{h_flex, v_flex};
-use gpui_kit::component::ActiveTheme;
-use gpui_kit::prelude::FluentBuilder;
-use gpui_kit::*;
+use nsh_core::prelude::*;
 
-#[derive(IntoElement)]
-pub struct TrackList {
-    tracks: Vec<Track>,
+use crate::{
+    model::{Config, CurrentTrackList, Track},
+    player::play_context,
+    ui::theme::{AppRadius, Clickable, colors},
+};
+
+fn format_duration(secs: u32) -> String {
+    format!("{}:{:02}", secs / 60, secs % 60)
 }
 
-impl TrackList {
-    pub fn new(tracks: Vec<Track>) -> Self {
-        Self { tracks }
-    }
-
-    fn format_duration(secs: u32) -> String {
-        format!("{}:{:02}", secs / 60, secs % 60)
-    }
+pub fn track_list(tracks: Vec<Track>) -> impl IntoElement {
+    dynamic(move || track_list_view(tracks.clone()))
 }
 
-impl RenderOnce for TrackList {
-    fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let count = self.tracks.len();
-        let selected_id = cx.global::<CurrentTrackList>().selected_id;
-        let tracks = self.tracks;
-        let shorten = cx.global::<Config>().shorten_titles;
+fn track_list_view(tracks: Vec<Track>) -> impl IntoElement {
+    let shorten = global::<Config>().get().shorten_titles;
+    let selected_id = global::<CurrentTrackList>().get().selected_id;
+    let all_tracks = tracks.clone();
 
-        v_flex()
-            .size_full()
+    let header = view()
+        .flex_row()
+        .items_center()
+        .h(px(32.0))
+        .px(px(16.0))
+        .gap(px(12.0))
+        .border_b_1()
+        .border_b_color(colors::LINE)
+        .child(
+            text("#")
+                .w(px(36.0))
+                .text_size(px(12.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::MUTED),
+        )
+        .child(
+            text("Title")
+                .flex_1()
+                .flex_grow(3.0)
+                .truncate()
+                .text_size(px(12.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::MUTED),
+        )
+        .child(
+            text("Artist")
+                .flex_1()
+                .flex_grow(2.0)
+                .truncate()
+                .text_size(px(12.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::MUTED),
+        )
+        .child(
+            text("Album")
+                .flex_1()
+                .flex_grow(2.0)
+                .truncate()
+                .text_size(px(12.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::MUTED),
+        )
+        .child(
+            text("Duration")
+                .w(px(60.0))
+                .text_right()
+                .text_size(px(12.0))
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(colors::MUTED),
+        );
+
+    let rows = tracks.into_iter().enumerate().map(|(idx, track)| {
+        let is_selected = selected_id == Some(track.id);
+        let tracks_clone = all_tracks.clone();
+        let display_title = track.display_title(shorten);
+        let duration = format_duration(track.duration_secs);
+
+        view()
+            .flex_row()
+            .items_center()
+            .h(px(40.0))
+            .px(px(16.0))
+            .gap(px(12.0))
+            .app_radius(0.75)
+            .map(|v| {
+                if is_selected {
+                    v.bg(colors::RAISED).border_1().border_color(colors::ACCENT)
+                } else {
+                    v
+                }
+            })
+            .clickable()
+            .label(display_title.clone())
+            .on_press(move || {
+                play_context(tracks_clone.clone(), idx);
+            })
             .child(
-                h_flex()
-                    .w_full()
-                    .h_8()
-                    .px_4()
-                    .gap_3()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .border_b_1()
-                    .border_color(cx.theme().border)
-                    .child(div().w_10().child("#"))
-                    .child(
-                        div()
-                            .flex_grow(3.0)
-                            .flex_basis(px(0.0))
-                            .overflow_hidden()
-                            .child("Title"),
-                    )
-                    .child(
-                        div()
-                            .flex_grow(2.0)
-                            .flex_basis(px(0.0))
-                            .overflow_hidden()
-                            .child("Artist"),
-                    )
-                    .child(
-                        div()
-                            .flex_grow(2.0)
-                            .flex_basis(px(0.0))
-                            .overflow_hidden()
-                            .child("Album"),
-                    )
-                    .child(div().w_16().text_right().child("Duration")),
+                text((idx + 1).to_string())
+                    .w(px(36.0))
+                    .text_size(px(13.0))
+                    .text_color(if is_selected {
+                        colors::ACCENT
+                    } else {
+                        colors::MUTED
+                    }),
             )
             .child(
-                uniform_list("track-table", count, move |range, _window, cx| {
-                    range
-                        .map(|idx| {
-                            let track = &tracks[idx];
-                            let track_id = track.id;
-                            let is_selected = selected_id == Some(track_id);
-                            let all_tracks = tracks.clone();
-
-                            h_flex()
-                                .id(ElementId::NamedInteger("track-row".into(), track_id))
-                                .w_full()
-                                .h_10()
-                                .px_4()
-                                .gap_3()
-                                .items_center()
-                                .rounded(cx.theme().radius)
-                                .when(is_selected, |this| this.bg(cx.theme().accent))
-                                .hover(|this| this.bg(cx.theme().accent.opacity(0.5)))
-                                .cursor_pointer()
-                                .on_click(move |_event, _window, cx| {
-                                    play_context(all_tracks.clone(), idx, cx);
-                                })
-                                .child(
-                                    div()
-                                        .w_10()
-                                        .text_sm()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(format!("{}", idx + 1)),
-                                )
-                                .child(
-                                    div()
-                                        .flex_grow(3.0)
-                                        .flex_basis(px(0.0))
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .truncate()
-                                                .child(track.display_title(shorten)),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex_grow(2.0)
-                                        .flex_basis(px(0.0))
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .truncate()
-                                                .child(track.artist.clone()),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .flex_grow(2.0)
-                                        .flex_basis(px(0.0))
-                                        .overflow_hidden()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .truncate()
-                                                .child(track.album.clone()),
-                                        ),
-                                )
-                                .child(
-                                    div()
-                                        .w_16()
-                                        .text_sm()
-                                        .text_right()
-                                        .text_color(cx.theme().muted_foreground)
-                                        .child(Self::format_duration(track.duration_secs)),
-                                )
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .flex_1(),
+                text(display_title)
+                    .truncate()
+                    .flex_1()
+                    .flex_grow(3.0)
+                    .text_size(px(14.0))
+                    .font_weight(FontWeight::MEDIUM)
+                    .text_color(if is_selected {
+                        colors::ACCENT
+                    } else {
+                        colors::TEXT
+                    }),
             )
-    }
+            .child(
+                text(track.artist)
+                    .truncate()
+                    .flex_1()
+                    .flex_grow(2.0)
+                    .text_size(px(13.0))
+                    .text_color(colors::MUTED),
+            )
+            .child(
+                text(track.album)
+                    .truncate()
+                    .flex_1()
+                    .flex_grow(2.0)
+                    .text_size(px(13.0))
+                    .text_color(colors::MUTED),
+            )
+            .child(
+                text(duration)
+                    .w(px(60.0))
+                    .text_right()
+                    .text_size(px(13.0))
+                    .text_color(colors::MUTED),
+            )
+    });
+
+    view()
+        .flex_1()
+        .child(header)
+        .child(scroll().flex_1().child(view().py(px(4.0)).children(rows)))
 }

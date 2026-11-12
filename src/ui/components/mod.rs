@@ -4,4 +4,5 @@ pub mod cover;
 pub mod player_bar;
 pub mod queue_popover;
 pub mod sidebar;
+pub mod text_input;
 pub mod track_list;

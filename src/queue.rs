@@ -1,4 +1,3 @@
-use gpui_kit::{Global, assets::IconName};
 use serde::{Deserialize, Serialize};
 use std::collections::VecDeque;
 use strum::EnumIter;
@@ -12,19 +11,13 @@ pub enum RepeatMode {
     Context,
     Track,
 }
+
 impl RepeatMode {
-    pub fn title(&self) -> String {
-        match &self {
-            Self::Off => String::from("Off"),
-            Self::Context => String::from("Original Playlist"),
-            Self::Track => String::from("Current Track"),
-        }
-    }
-    pub fn icon(&self) -> IconName {
-        match &self {
-            Self::Off => IconName::RepeatOff,
-            Self::Context => IconName::Repeat,
-            Self::Track => IconName::Repeat1,
+    pub fn title(&self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Context => "Original Playlist",
+            Self::Track => "Current Track",
         }
     }
 }
@@ -36,20 +29,20 @@ pub enum QueueTab {
     History,
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 pub enum TrackSource {
     UserAdded,
     Context,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct QueueItem {
     pub id: u64,
     pub track: Track,
     pub source: TrackSource,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone, Default, Debug)]
 pub struct QueueManager {
     pub history: VecDeque<Track>,
     pub queue: VecDeque<QueueItem>,
@@ -59,6 +52,7 @@ pub struct QueueManager {
     pub shuffle: bool,
     pub active_tab: QueueTab,
 }
+
 impl QueueManager {
     pub fn play_from_context(&mut self, tracks: Vec<Track>, index: usize) -> Option<Track> {
         self.original_context = tracks.clone();
@@ -190,6 +184,13 @@ impl QueueManager {
         };
         self.repeat_mode
     }
-}
 
-impl Global for QueueManager {}
+    pub fn toggle_shuffle(&mut self) -> bool {
+        self.shuffle = !self.shuffle;
+        self.shuffle
+    }
+
+    pub fn previous(&mut self) -> Option<Track> {
+        self.history.pop_back()
+    }
+}

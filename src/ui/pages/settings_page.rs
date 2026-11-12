@@ -1,243 +1,296 @@
-use crate::model::{AudioPlayer, Config, DiscordRpc, apply_theme};
-use crate::save_config;
-use gpui_kit::base::h_flex;
-use gpui_kit::base::input::InputState;
-use gpui_kit::component::Sizable;
-use gpui_kit::component::button::Button;
-use gpui_kit::component::input::Input;
-use gpui_kit::component::setting::{
-    NumberFieldOptions, SettingField, SettingGroup, SettingItem, SettingPage, Settings,
-};
-use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Theme, ThemeRegistry};
-use gpui_kit::*;
+use nsh_core::prelude::*;
 use rfd::FileDialog;
 
-#[derive(IntoElement)]
-pub struct SettingsPage;
+use crate::{
+    discord::toggle_discord_rpc,
+    model::Config,
+    save_config,
+    ui::{
+        components::audio_slider::audio_slider_with_step,
+        icons::{IconName, icon_elem},
+        theme::{AppRadius, Clickable, Finish, Finished, THEMES, colors, select_theme},
+    },
+};
 
-impl SettingsPage {
-    pub fn new() -> Self {
-        Self
-    }
+fn toggle_switch(
+    enabled: bool,
+    label: &'static str,
+    on_toggle: impl Fn() + 'static,
+) -> impl IntoElement {
+    view()
+        .w(px(44.0))
+        .h(px(24.0))
+        .app_radius(1.5)
+        .p(px(2.0))
+        .bg(if enabled {
+            colors::ACCENT_FILL
+        } else {
+            colors::TRACK
+        })
+        .clickable()
+        .label(label)
+        .on_press(on_toggle)
+        .child(
+            view()
+                .size(px(20.0))
+                .app_radius(1.25)
+                .bg(if enabled {
+                    colors::ON_ACCENT
+                } else {
+                    colors::KNOB
+                })
+                .finish(Finish::Knob)
+                .map(|v| {
+                    if enabled {
+                        v.self_end()
+                    } else {
+                        v.self_start()
+                    }
+                }),
+        )
 }
 
-impl RenderOnce for SettingsPage {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let themes: Vec<(SharedString, SharedString)> = ThemeRegistry::global(cx)
-            .sorted_themes()
-            .into_iter()
-            .map(|theme| (theme.name.clone(), theme.name.clone()))
-            .collect();
+fn setting_row(title: &'static str, desc: &'static str, control: AnyElement) -> AnyElement {
+    view()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .gap(px(18.0))
+        .py(px(14.0))
+        .child(
+            view()
+                .flex_1()
+                .gap(px(3.0))
+                .child(
+                    text(title)
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors::TEXT),
+                )
+                .child(text(desc).text_size(px(12.0)).text_color(colors::MUTED)),
+        )
+        .child(control)
+        .into_element()
+}
 
-        let current_theme_name = cx.theme().theme_name().clone();
-        let config = cx.global::<Config>();
-        let initial_music_dir = config
+fn section(title: &'static str, rows: Vec<AnyElement>) -> AnyElement {
+    view()
+        .gap(px(8.0))
+        .child(
+            text(title.to_uppercase())
+                .text_size(px(11.0))
+                .font_weight(FontWeight::BOLD)
+                .text_color(colors::FAINT),
+        )
+        .child(
+            view()
+                .px(px(16.0))
+                .app_radius(1.25)
+                .finish(Finish::Card)
+                .border_1()
+                .border_color(colors::BORDER)
+                .children(rows),
+        )
+        .into_element()
+}
+
+fn theme_selector() -> AnyElement {
+    dynamic(|| {
+        let current = global::<Config>().get().theme_name;
+        view()
+            .flex_row()
+            .gap(px(6.0))
+            .children(THEMES.into_iter().map(|theme| {
+                let selected = match current.as_str() {
+                    "System" => theme == "System",
+                    "Light" => theme == "Light",
+                    "Default Light" => theme == "Light",
+                    _ => theme == "Dark",
+                };
+                view()
+                    .h(px(30.0))
+                    .px(px(11.0))
+                    .items_center()
+                    .justify_center()
+                    .app_radius(0.75)
+                    .map(|button| {
+                        if selected {
+                            button.bg(colors::ACCENT_FILL)
+                        } else {
+                            button
+                                .bg(colors::INSET)
+                                .border_1()
+                                .border_color(colors::BORDER)
+                        }
+                    })
+                    .clickable()
+                    .label(theme)
+                    .on_press(move || select_theme(theme))
+                    .child(
+                        text(theme)
+                            .text_size(px(12.0))
+                            .font_weight(if selected {
+                                FontWeight::BOLD
+                            } else {
+                                FontWeight::MEDIUM
+                            })
+                            .text_color(if selected {
+                                colors::ON_ACCENT
+                            } else {
+                                colors::MUTED
+                            }),
+                    )
+            }))
+            .into_element()
+    })
+}
+
+fn appearance_rows() -> Vec<AnyElement> {
+    vec![
+        setting_row(
+            "Color scheme",
+            "Follow the system, or choose light or dark mode.",
+            theme_selector(),
+        ),
+        view().h(px(1.0)).bg(colors::LINE).into_element(),
+        setting_row(
+            "Corner radius",
+            "Adjust the rounding used by cards and controls.",
+            view()
+                .flex_row()
+                .items_center()
+                .w(px(190.0))
+                .gap(px(10.0))
+                .child(audio_slider_with_step(
+                    || global::<Config>().get().corner_radius / 16.0,
+                    1.0 / 16.0,
+                    |value| {
+                        let radius = (value * 16.0).round().clamp(0.0, 16.0);
+                        global::<Config>().update(|config| config.corner_radius = radius);
+                        save_config(&global::<Config>().get_untracked());
+                    },
+                ))
+                .child(dynamic(|| {
+                    text(format!("{:.0} pt", global::<Config>().get().corner_radius))
+                        .w(px(42.0))
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED)
+                }))
+                .into_element(),
+        ),
+    ]
+}
+
+fn playback_rows() -> Vec<AnyElement> {
+    vec![
+        dynamic(|| {
+            let enabled = global::<Config>().get().discord_rpc;
+            setting_row(
+                "Discord Rich Presence",
+                "Show the current track and album in Discord.",
+                toggle_switch(enabled, "Discord Rich Presence", toggle_discord_rpc).into_element(),
+            )
+        }),
+        view().h(px(1.0)).bg(colors::LINE).into_element(),
+        dynamic(|| {
+            let enabled = global::<Config>().get().shorten_titles;
+            setting_row(
+                "Shorten track titles",
+                "Remove common video tags such as “Official Audio”.",
+                toggle_switch(enabled, "Shorten track titles", || {
+                    global::<Config>().update(|config| {
+                        config.shorten_titles = !config.shorten_titles;
+                    });
+                    save_config(&global::<Config>().get_untracked());
+                })
+                .into_element(),
+            )
+        }),
+    ]
+}
+
+fn library_rows() -> Vec<AnyElement> {
+    vec![dynamic(|| {
+        let directory = global::<Config>()
+            .get()
             .music_dir
-            .clone()
-            .into_string()
-            .unwrap_or(String::from("Not found"));
-        let input = window.use_keyed_state("music-directory-input", cx, move |window, cx| {
-            InputState::new(window, cx).default_value(initial_music_dir)
-        });
-
-        Settings::new("app-settings").pages(vec![
-            SettingPage::new("General")
-                .default_open(true)
-                .group(
-                    SettingGroup::new()
-                        .pr(px(4.0))
-                        .title("Appearance")
-                        .item(
-                            SettingItem::new(
-                                "Theme",
-                                SettingField::scrollable_dropdown(
-                                    themes,
-                                    move |_| current_theme_name.clone(),
-                                    |val: SharedString, cx: &mut App| {
-                                        if let Some(theme) =
-                                            ThemeRegistry::global(cx).themes().get(&val).cloned()
-                                        {
-                                            apply_theme(&theme, cx);
-                                            cx.update_global::<Config, _>(|config, _cx| {
-                                                config.theme_name = SharedString::from(&*theme.name);
-                                                let _ = save_config(config);
-                                            });
-                                        }
-                                    },
-                                ),
-                            )
-                            .description("Select a nice theme."),
-                        )
-                        .item(
-                            SettingItem::new(
-                                "Corner Radius",
-                                SettingField::number_input(
-                                    NumberFieldOptions {
-                                        min: 0.0,
-                                        max: 16.0,
-                                        step: 1.0,
-                                    },
-                                    |cx: &App| cx.global::<Config>().corner_radius as f64,
-                                    |val: f64, cx: &mut App| {
-                                        let radius = val as f32;
-                                        cx.update_global::<Config, _>(|config, _cx| {
-                                            config.corner_radius = radius;
-                                            let _ = save_config(config);
-                                        });
-                                        let theme_name = cx.global::<Config>().theme_name.clone();
-                                        if let Some(theme) = ThemeRegistry::global(cx)
-                                            .themes()
-                                            .get(&theme_name)
-                                            .cloned()
-                                        {
-                                            if theme.radius.is_none() {
-                                                Theme::update(cx, |current| {
-                                                    current.radius = px(radius);
-                                                    current.radius_lg = px((radius * 1.5).round());
-                                                });
-                                            }
-                                        }
-                                    },
-                                ),
-                            )
-                            .description("Default corner radius when the selected theme does not set it. (Default: 8)"),
-                        )
-                        .item(
-                            SettingItem::new(
-                                "Shorten Title",
-                                SettingField::switch(
-                                    |cx: &App| cx.global::<Config>().shorten_titles,
-                                    |val: bool, cx: &mut App| {
-                                        cx.update_global::<Config, _>(|config, _cx| {
-                                            config.shorten_titles = val;
-                                            let _ = save_config(config);
-                                        });
-                                    },
-                                )
-                                .p(px(4.0)),
-                            )
-                            .description("If this option is selected the title are shortened, which may result in unexpected behavior."),
-                        ),
-                ).group(
-                    SettingGroup::new()
-                        .pr(px(4.0))
-                        .title("Connections")
-                        .item(
-                            SettingItem::new(
-                                "Discord RPC",
-                                SettingField::switch(
-                                    |cx: &App| cx.global::<Config>().discord_rpc,
-                                    |val: bool, cx: &mut App| {
-                                        cx.update_global::<Config, _>(|config, _cx| {
-                                            config.discord_rpc = val;
-                                            let _ = save_config(config);
-                                        });
-                                        cx.global::<DiscordRpc>().set_enabled(val);
-                                        if val {
-                                            let (current_track, is_playing) =
-                                                cx.read_global::<AudioPlayer, _>(|player, _| {
-                                                    (player.current_track.clone(), player.is_playing)
-                                                });
-                                            if let Some(track) = current_track {
-                                                if is_playing {
-                                                    cx.global::<DiscordRpc>().update_track(&track);
-                                                } else {
-                                                    cx.global::<DiscordRpc>().set_paused(&track);
-                                                }
-                                            } else {
-                                                cx.global::<DiscordRpc>().set_idle();
-                                            }
-                                        }
-                                    },
-                                )
-                                .p(px(4.0)),
-                            )
-                            .description("Toggle to display Heliox as an Discord activity."),
+            .to_str()
+            .unwrap_or("Not set")
+            .to_string();
+        setting_row(
+            "Music directory",
+            "Folder scanned for local library tracks.",
+            view()
+                .flex_row()
+                .items_center()
+                .gap(px(8.0))
+                .child(
+                    text(directory)
+                        .number_of_lines(1)
+                        .max_w(px(240.0))
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED),
+                )
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .h(px(32.0))
+                        .px(px(12.0))
+                        .gap(px(6.0))
+                        .app_radius(0.75)
+                        .bg(colors::RAISED)
+                        .border_1()
+                        .border_color(colors::BORDER)
+                        .clickable()
+                        .label("Browse music directory")
+                        .on_press(|| {
+                            if let Some(folder) = FileDialog::new().pick_folder() {
+                                global::<Config>().update(|config| config.music_dir = folder);
+                                save_config(&global::<Config>().get_untracked());
+                                crate::library::reload_local_library();
+                            }
+                        })
+                        .child(icon_elem(IconName::Folder, 14.0, colors::MUTED))
+                        .child(
+                            text("Browse")
+                                .text_size(px(12.0))
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(colors::TEXT),
                         ),
                 )
-                .group(
-                    SettingGroup::new()
-                        .pr(px(4.0))
-                        .title("Files")
-                        .item(
-                        SettingItem::new(
-                            "Music Directory",
-                            SettingField::render(move |options, _, _| {
-                                let input = input.clone();
-                                h_flex()
-                                    .w_full()
-                                    .justify_between()
-                                    .gap_1()
-                                    .child(
-                                        div()
-                                            .id("music-directory-tooltip")
-                                            .tooltip({
-                                                let input = input.clone();
-                                                move |window, cx| {
-                                                    let val = input.read(cx).value();
-                                                    Tooltip::new(val).build(window, cx)
-                                                }
-                                            })
-                                            .child(
-                                                Input::new(&input).readonly(true).w_40().truncate(),
-                                            ),
-                                    )
-                                    .child(
-                                        Button::new("path")
-                                            .label("Switch")
-                                            .with_size(options.size())
-                                            .on_click({
-                                                let input = input.clone();
-                                                move |_event, window, cx| {
-                                                    let input = input.clone();
-                                                    let window_handle = window.window_handle();
-                                                    cx.spawn(async move |cx: &mut AsyncApp| {
-                                                        let path = cx
-                                                            .background_executor()
-                                                            .spawn(async move {
-                                                                FileDialog::new().pick_folder()
-                                                            })
-                                                            .await;
+                .into_element(),
+        )
+    })]
+}
 
-                                                        if let Some(path) = path {
-                                                            let path_str =
-                                                                path.display().to_string();
-                                                            let _ = window_handle.update(
-                                                                cx,
-                                                                |_, window, cx| {
-                                                                    input.update(
-                                                                        cx,
-                                                                        |input, cx| {
-                                                                            input.set_value(
-                                                                                path_str.clone(),
-                                                                                window,
-                                                                                cx,
-                                                                            );
-                                                                        },
-                                                                    );
-                                                                    cx.update_global::<Config, _>(
-                                                                        |config, _cx| {
-                                                                            config.music_dir =
-                                                                                path_str.into();
-                                                                            let _ =
-                                                                                save_config(config);
-                                                                        },
-                                                                    );
-                                                                },
-                                                            );
-                                                        }
-                                                    })
-                                                    .detach();
-                                                }
-                                            }),
-                                    )
-                                    .into_any_element()
-                            }),
-                        )
-                        .description("Path to your local Music location."),
-                    ),
+pub fn settings_page() -> impl IntoElement {
+    view()
+        .flex_1()
+        .p(px(24.0))
+        .gap(px(20.0))
+        .child(
+            view()
+                .gap(px(4.0))
+                .child(
+                    text("Settings")
+                        .text_size(px(28.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(colors::TEXT),
+                )
+                .child(
+                    text("Configure your Heliox experience and audio preferences.")
+                        .text_size(px(13.0))
+                        .text_color(colors::MUTED),
                 ),
-        ])
-    }
+        )
+        .child(
+            scroll().flex_1().child(
+                view()
+                    .gap(px(18.0))
+                    .child(section("Appearance", appearance_rows()))
+                    .child(section("Playback", playback_rows()))
+                    .child(section("Library", library_rows())),
+            ),
+        )
 }

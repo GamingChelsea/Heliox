@@ -433,18 +433,15 @@ pub fn init_audio(
                                 start = end + 1;
                             }
                         } else {
-                            let mut response = match client
-                                .get(&url)
-                                .header("User-Agent", user_agent)
-                                .send()
-                            {
-                                Ok(res) => res,
-                                Err(err) => {
-                                    tracing::error!(?err, "Download failed");
-                                    downloaded_state.is_finished.store(true, Ordering::Relaxed);
-                                    return;
-                                }
-                            };
+                            let mut response =
+                                match client.get(&url).header("User-Agent", user_agent).send() {
+                                    Ok(res) => res,
+                                    Err(err) => {
+                                        tracing::error!(?err, "Download failed");
+                                        downloaded_state.is_finished.store(true, Ordering::Relaxed);
+                                        return;
+                                    }
+                                };
 
                             let mut buffer = [0u8; 8192];
                             loop {

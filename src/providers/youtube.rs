@@ -3,6 +3,7 @@ use serde_json::{Value, json};
 use std::{
     hash::{DefaultHasher, Hash, Hasher},
     sync::{LazyLock, RwLock},
+    time::Duration,
 };
 
 const PARAMS_SONGS: &str = "EgWKAQIIAWoSEAQQAxAFEBAQChAJEBUQDhAR";
@@ -13,8 +14,12 @@ const INNERTUBE_GUIDE_URL: &str = "https://music.youtube.com/youtubei/v1/guide";
 const INNERTUBE_PLAYER_URL: &str = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false";
 const VISIONOS_USER_AGENT: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15";
 
-static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> =
-    LazyLock::new(reqwest::blocking::Client::new);
+static HTTP_CLIENT: LazyLock<reqwest::blocking::Client> = LazyLock::new(|| {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(15))
+        .build()
+        .expect("YouTube HTTP client configuration is valid")
+});
 
 static VISITOR_DATA: LazyLock<RwLock<Option<String>>> = LazyLock::new(|| RwLock::new(None));
 
@@ -82,44 +87,56 @@ pub fn search_filtered(
         SearchFilter::All => {
             let mut tracks = Vec::new();
             let mut seen_ids = std::collections::HashSet::new();
+            let mut failed_requests = Vec::new();
 
-            // Fetch songs first
-            if let Ok(song_tracks) = search_with_params(query, Some(PARAMS_SONGS)) {
-                for t in song_tracks {
-                    if let TrackSource::Stream { ref id, .. } = t.source {
-                        if seen_ids.insert(id.clone()) {
-                            tracks.push(t);
-                        }
-                    }
-                }
-            }
+            append_search_results(
+                search_with_params(query, Some(PARAMS_SONGS)),
+                &mut tracks,
+                &mut seen_ids,
+                &mut failed_requests,
+            );
+            append_search_results(
+                search_with_params(query, Some(PARAMS_VIDEOS)),
+                &mut tracks,
+                &mut seen_ids,
+                &mut failed_requests,
+            );
 
-            // Fetch videos next
-            if let Ok(video_tracks) = search_with_params(query, Some(PARAMS_VIDEOS)) {
-                for t in video_tracks {
-                    if let TrackSource::Stream { ref id, .. } = t.source {
-                        if seen_ids.insert(id.clone()) {
-                            tracks.push(t);
-                        }
-                    }
-                }
-            }
-
-            // Fallback if both returned nothing
             if tracks.is_empty() {
-                if let Ok(fallback_tracks) = search_with_params(query, None) {
-                    for t in fallback_tracks {
-                        if let TrackSource::Stream { ref id, .. } = t.source {
-                            if seen_ids.insert(id.clone()) {
-                                tracks.push(t);
-                            }
-                        }
-                    }
-                }
+                append_search_results(
+                    search_with_params(query, None),
+                    &mut tracks,
+                    &mut seen_ids,
+                    &mut failed_requests,
+                );
+            }
+
+            if tracks.is_empty() && !failed_requests.is_empty() {
+                return Err(std::io::Error::other(failed_requests.join("; ")).into());
             }
 
             Ok(tracks)
         }
+    }
+}
+
+fn append_search_results(
+    result: Result<Vec<Track>, Box<dyn std::error::Error + Send + Sync>>,
+    tracks: &mut Vec<Track>,
+    seen_ids: &mut std::collections::HashSet<String>,
+    failed_requests: &mut Vec<String>,
+) {
+    match result {
+        Ok(results) => {
+            for track in results {
+                if let TrackSource::Stream { ref id, .. } = track.source
+                    && seen_ids.insert(id.clone())
+                {
+                    tracks.push(track);
+                }
+            }
+        }
+        Err(error) => failed_requests.push(error.to_string()),
     }
 }
 
@@ -152,7 +169,14 @@ fn search_with_params(
         )
         .json(&body)
         .send()?
+        .error_for_status()?
         .json()?;
+
+    if let Some(message) = response.pointer("/error/message").and_then(Value::as_str) {
+        return Err(
+            std::io::Error::other(format!("YouTube rejected the search: {message}")).into(),
+        );
+    }
 
     if let Some(vd) = response
         .pointer("/responseContext/visitorData")

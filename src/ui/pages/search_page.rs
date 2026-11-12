@@ -1,291 +1,240 @@
-use crate::model::Track;
-use crate::providers::youtube::{self, SearchFilter};
-use crate::ui::components::track_list::TrackList;
-use gpui_kit::component::button::{Button, ButtonGroup, ButtonVariants};
-use gpui_kit::component::input::{Input, InputState};
-use gpui_kit::component::spinner::Spinner;
-use gpui_kit::component::{ActiveTheme, Icon, Selectable as _};
-use gpui_kit::{
-    assets::IconName,
-    base::{h_flex, v_flex},
-    component::label::Label,
-    *,
+use nsh_base::button;
+use nsh_core::prelude::*;
+
+use crate::{
+    model::Track,
+    providers::youtube::{self, SearchFilter},
+    ui::{
+        components::{text_input::text_input, track_list::track_list},
+        icons::{IconName, icon_elem},
+        theme::{AppRadius, Finish, Finished, colors},
+    },
 };
-use std::cell::RefCell;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
 
-#[derive(Default, Clone)]
-pub struct SearchPageState {
-    pub results: Vec<Track>,
+#[derive(Clone, Default)]
+pub struct SearchState {
+    pub query: String,
+    pub filter: SearchFilter,
     pub is_loading: bool,
-    pub last_query: String,
+    pub results: Vec<Track>,
+    pub error: Option<String>,
+    request_id: u64,
 }
 
-#[derive(IntoElement)]
-pub struct SearchPage;
-impl SearchPage {
-    pub fn new() -> Self {
-        Self
-    }
-}
+pub fn trigger_search() {
+    let state = global::<SearchState>().get_untracked();
+    let q = state.query.trim().to_string();
+    let filter = state.filter;
 
-pub fn trigger_search(
-    query: String,
-    filter: SearchFilter,
-    debounce_ms: u64,
-    state: Rc<RefCell<SearchPageState>>,
-    version: Arc<AtomicU64>,
-    cx: &mut App,
-) {
-    let trimmed = query.trim().to_string();
-    if trimmed.is_empty() {
-        let mut s = state.borrow_mut();
-        s.results.clear();
-        s.is_loading = false;
-        s.last_query.clear();
-        cx.refresh_windows();
+    if q.is_empty() {
+        global::<SearchState>().update(|s| {
+            s.results.clear();
+            s.is_loading = false;
+            s.error = None;
+            s.request_id = s.request_id.wrapping_add(1);
+        });
         return;
     }
 
-    let current_v = version.fetch_add(1, Ordering::SeqCst) + 1;
-    state.borrow_mut().is_loading = true;
-    state.borrow_mut().last_query = trimmed.clone();
-    cx.refresh_windows();
+    let request_id = state.request_id.wrapping_add(1);
+    global::<SearchState>().update(|s| {
+        s.is_loading = true;
+        s.error = None;
+        s.request_id = request_id;
+    });
 
-    let state_clone = state.clone();
-    let version_clone = version.clone();
-    let query_to_fetch = trimmed;
-
-    cx.spawn(async move |cx: &mut AsyncApp| {
-        if debounce_ms > 0 {
-            cx.background_executor()
-                .timer(Duration::from_millis(debounce_ms))
-                .await;
-        }
-
-        if version_clone.load(Ordering::SeqCst) != current_v {
-            return;
-        }
-
-        let results =
-            cx.background_executor()
-                .spawn(async move {
-                    youtube::search_filtered(&query_to_fetch, filter).unwrap_or_default()
-                })
-                .await;
-
-        if version_clone.load(Ordering::SeqCst) == current_v {
-            let _ = cx.update(|cx| {
-                let mut s = state_clone.borrow_mut();
-                s.results = results;
-                s.is_loading = false;
-                cx.refresh_windows();
+    let (tx, rx) = async_channel::bounded(1);
+    std::thread::spawn(move || {
+        let result = youtube::search_filtered(&q, filter).map_err(|error| error.to_string());
+        let _ = tx.send_blocking(result);
+    });
+    spawn(async move {
+        if let Ok(result) = rx.recv().await {
+            global::<SearchState>().update(|s| {
+                if s.request_id == request_id {
+                    s.is_loading = false;
+                    match result {
+                        Ok(results) => {
+                            s.results = results;
+                            s.error = None;
+                        }
+                        Err(error) => {
+                            s.results.clear();
+                            s.error = Some(error);
+                        }
+                    }
+                }
+            });
+        } else {
+            global::<SearchState>().update(|s| {
+                if s.request_id == request_id {
+                    s.is_loading = false;
+                    s.error = Some("The search request stopped unexpectedly.".to_string());
+                }
             });
         }
-    })
-    .detach();
+    });
 }
 
-impl RenderOnce for SearchPage {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let search_state = window.use_keyed_state("search-page-state", cx, |_, _| {
-            Rc::new(RefCell::new(SearchPageState::default()))
-        });
-        let search_version = window.use_keyed_state("search-page-version", cx, |_, _| {
-            Arc::new(AtomicU64::new(0))
-        });
+pub fn search_page() -> impl IntoElement {
+    search_page_view()
+}
 
-        let selected_filter =
-            window.use_keyed_state("search-page-filter", cx, |_, _| std::cell::Cell::new(0u8));
-        let current_filter = selected_filter.read(cx).get();
-        let current_search_filter = match current_filter {
-            1 => SearchFilter::Songs,
-            2 => SearchFilter::Videos,
-            _ => SearchFilter::All,
-        };
-
-        let filter_setter = selected_filter.clone();
-        let state_for_filter = search_state.read(cx).clone();
-        let version_for_filter = search_version.read(cx).clone();
-
-        let input = window.use_keyed_state("search-page-input", cx, |window, cx| {
-            InputState::new(window, cx)
-        });
-
-        let focus_on_mount = window.use_keyed_state("search-page-focus-on-mount", cx, |_, _| {
-            std::cell::Cell::new(true)
-        });
-        let focus_handle = input.read(cx).focus_handle(cx);
-        let click_handle = focus_handle.clone();
-
-        if focus_on_mount.read(cx).replace(false) {
-            let initial_focus = focus_handle.clone();
-            window.defer(cx, move |window, cx| {
-                initial_focus.focus(window, cx);
-            });
-        }
-
-        let query_text = input.read(cx).value().to_string();
-        {
-            let mut state = search_state.read(cx).borrow_mut();
-            if state.last_query != query_text {
-                state.last_query = query_text.clone();
-                drop(state);
-                trigger_search(
-                    query_text.clone(),
-                    current_search_filter,
-                    300,
-                    search_state.read(cx).clone(),
-                    search_version.read(cx).clone(),
-                    cx,
-                );
-            }
-        }
-
-        let (tracks, is_loading) = {
-            let s = search_state.read(cx).borrow();
-            (s.results.clone(), s.is_loading)
-        };
-
-        v_flex()
-            .size_full()
-            .p_4()
-            .gap_4()
-            .child(
-                h_flex()
-                    .w_full()
-                    .items_center()
-                    .justify_between()
-                    .child(Label::new("Search").text_3xl())
-                    .child(
-                        div()
-                            .bg(cx.theme().background)
-                            .border_1()
-                            .border_color(cx.theme().border)
-                            .rounded(cx.theme().radius)
-                            .w(px(380.0))
-                            .on_mouse_down(MouseButton::Left, move |_event, window, cx| {
-                                click_handle.focus(window, cx);
-                            })
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .items_center()
-                                    .child(
-                                        ButtonGroup::new("toggle-group")
-                                            .child(
-                                                Button::new("btn_all")
-                                                    .ghost()
-                                                    .label("All")
-                                                    .tooltip("Searches for Youtube content (songs and videos)")
-                                                    .selected(current_filter == 0),
-                                            )
-                                            .child(
-                                                Button::new("btn_sng")
-                                                    .ghost()
-                                                    .label("Songs")
-                                                    .tooltip("Searches for Youtube Music songs (likely more official releases)")
-                                                    .selected(current_filter == 1),
-                                            )
-                                            .child(
-                                                Button::new("btn_vdo")
-                                                    .ghost()
-                                                    .label("Video")
-                                                    .tooltip("Searches for Youtube videos (likely more unreleased / smaller songs)")
-                                                    .rounded(px(0.0))
-                                                    .selected(current_filter == 2),
-                                            )
-                                            .on_click({
-                                                let input_entity = input.clone();
-                                                move |selected_indices, window, cx| {
-                                                    if let Some(first) = selected_indices.first() {
-                                                        let f = *first as u8;
-                                                        filter_setter.read(cx).set(f);
-                                                        let sf = match f {
-                                                            1 => SearchFilter::Songs,
-                                                            2 => SearchFilter::Videos,
-                                                            _ => SearchFilter::All,
-                                                        };
-                                                        let q = input_entity
-                                                            .read(cx)
-                                                            .value()
-                                                            .to_string();
-                                                        trigger_search(
-                                                            q,
-                                                            sf,
-                                                            0,
-                                                            state_for_filter.clone(),
-                                                            version_for_filter.clone(),
-                                                            cx,
-                                                        );
-                                                        window.refresh();
-                                                    }
-                                                }
-                                            }),
-                                    )
-                                    .child(
-                                        div().w(px(1.0)).h(px(18.0)).ml_2().bg(cx.theme().border),
-                                    )
-                                    .child(
-                                        Input::new(&input)
-                                            .flex_1()
-                                            .prefix(Icon::new(IconName::Search))
-                                            .cleanable(true)
-                                            .appearance(false),
-                                    ),
-                            ),
-                    ),
-            )
-            .child(div().flex_1().w_full().overflow_hidden().child(
-                if is_loading && tracks.is_empty() {
-                    v_flex()
-                        .size_full()
+fn search_page_view() -> impl IntoElement {
+    view()
+        .flex_1()
+        .p(px(24.0))
+        .gap(px(16.0))
+        // Header & Search Box
+        .child(
+            view()
+                .gap(px(12.0))
+                .child(
+                    text("Search Music")
+                        .text_size(px(28.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(colors::TEXT),
+                )
+                .child(
+                    view()
+                        .flex_row()
                         .items_center()
-                        .justify_center()
-                        .gap_2()
-                        .child(Spinner::new())
+                        .h(px(44.0))
+                        .px(px(14.0))
+                        .gap(px(10.0))
+                        .bg(colors::INPUT)
+                        .text_color(colors::INPUT_TEXT)
+                        .border_1()
+                        .border_color(colors::BORDER)
+                        .app_radius(1.25)
+                        .child(icon_elem(IconName::Search, 20.0, colors::INPUT_MUTED))
+                        .child(text_input(
+                            move || global::<SearchState>().get().query,
+                            "Search artists, songs or videos on YouTube...",
+                            move |v: &str| {
+                                global::<SearchState>().update(|s| {
+                                    s.query = v.to_string();
+                                    s.results.clear();
+                                    s.error = None;
+                                    s.is_loading = false;
+                                    s.request_id = s.request_id.wrapping_add(1);
+                                });
+                            },
+                            move |_: &str| trigger_search(),
+                        ))
                         .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Searching YouTube..."),
-                        )
-                        .into_any_element()
-                } else if tracks.is_empty() && !query_text.is_empty() {
-                    v_flex()
-                        .size_full()
-                        .items_center()
-                        .justify_center()
-                        .gap_2()
-                        .child(Icon::new(IconName::Search).size_8())
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("No tracks found."),
-                        )
-                        .into_any_element()
-                } else if !tracks.is_empty() {
-                    TrackList::new(tracks).into_any_element()
+                            button()
+                                .h(px(30.0))
+                                .px(px(12.0))
+                                .items_center()
+                                .justify_center()
+                                .app_radius(0.75)
+                                .bg(colors::ACCENT_FILL)
+                                .finish(Finish::Accent)
+                                .on_press(trigger_search)
+                                .child(
+                                    text("Search")
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .text_color(colors::ON_ACCENT),
+                                ),
+                        ),
+                )
+                // Filter Pills
+                .child(dynamic(filter_buttons)),
+        )
+        // Results
+        .child(view().flex_1().child(dynamic(search_results_view)))
+}
+
+fn filter_buttons() -> impl IntoElement {
+    let selected = global::<SearchState>().get().filter;
+    let filter_pill = |label: &'static str, filter: SearchFilter| {
+        let is_selected = selected == filter;
+        button()
+            .h(px(32.0))
+            .px(px(14.0))
+            .items_center()
+            .justify_center()
+            .app_radius(2.0)
+            .map(|v| {
+                if is_selected {
+                    v.bg(colors::ACCENT_FILL)
                 } else {
-                    v_flex()
-                        .size_full()
-                        .items_center()
-                        .justify_center()
-                        .gap_2()
-                        .child(Icon::new(IconName::Search).size_8())
-                        .child(
-                            div()
-                                .text_sm()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Search for songs, albums, or unreleased tracks"),
-                        )
-                        .into_any_element()
-                },
-            ))
-            .into_any_element()
+                    v.bg(colors::RAISED).border_1().border_color(colors::BORDER)
+                }
+            })
+            .on_press(move || {
+                global::<SearchState>().update(|s| s.filter = filter);
+                trigger_search();
+            })
+            .child(
+                text(label)
+                    .text_size(px(13.0))
+                    .font_weight(if is_selected {
+                        FontWeight::BOLD
+                    } else {
+                        FontWeight::MEDIUM
+                    })
+                    .text_color(if is_selected {
+                        colors::ON_ACCENT
+                    } else {
+                        colors::MUTED
+                    }),
+            )
+    };
+
+    view()
+        .flex_row()
+        .gap(px(8.0))
+        .child(filter_pill("All", SearchFilter::All))
+        .child(filter_pill("Songs", SearchFilter::Songs))
+        .child(filter_pill("Videos", SearchFilter::Videos))
+}
+
+fn search_results_view() -> impl IntoElement {
+    let state = global::<SearchState>().get();
+    if state.is_loading {
+        return view()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .child(
+                text("Searching YouTube...")
+                    .text_size(px(15.0))
+                    .text_color(colors::MUTED),
+            )
+            .into_element();
     }
+
+    if let Some(error) = state.error {
+        return view()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .child(
+                text(format!("YouTube search failed: {error}"))
+                    .text_size(px(14.0))
+                    .text_color(colors::DANGER),
+            )
+            .into_element();
+    }
+
+    if state.results.is_empty() {
+        return view()
+            .flex_1()
+            .items_center()
+            .justify_center()
+            .child(
+                text(if state.query.is_empty() {
+                    "Type something above to search for tracks or videos."
+                } else {
+                    "No tracks found for your search."
+                })
+                .text_size(px(15.0))
+                .text_color(colors::MUTED),
+            )
+            .into_element();
+    }
+    track_list(state.results).into_element()
 }

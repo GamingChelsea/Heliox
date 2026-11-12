@@ -1,20 +1,19 @@
 use crate::{audio::AudioCommand, library::clean_title, queue::RepeatMode};
-use gpui_kit::{Global, SharedString, private::serde::Deserialize};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::{
     path::{Path, PathBuf},
     sync::{Arc, atomic::AtomicU64},
 };
 
-#[derive(Serialize, Deserialize, Clone)]
+#[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Config {
-    #[serde(default)]
-    pub theme_name: SharedString,
+    #[serde(default = "default_theme")]
+    pub theme_name: String,
     #[serde(default)]
     pub music_dir: PathBuf,
-    #[serde(default)]
+    #[serde(default = "default_true")]
     pub shorten_titles: bool,
-    #[serde(default)]
+    #[serde(default = "default_volume")]
     pub volume: f32,
     #[serde(default)]
     pub discord_rpc: bool,
@@ -24,6 +23,18 @@ pub struct Config {
     pub corner_radius: f32,
 }
 
+fn default_theme() -> String {
+    "Default Dark".to_string()
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_volume() -> f32 {
+    0.50
+}
+
 fn default_corner_radius() -> f32 {
     8.0
 }
@@ -31,7 +42,7 @@ fn default_corner_radius() -> f32 {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            theme_name: SharedString::from("Default Dark"),
+            theme_name: default_theme(),
             music_dir: dirs::audio_dir()
                 .or_else(dirs::home_dir)
                 .unwrap_or_default(),
@@ -44,29 +55,29 @@ impl Default for Config {
     }
 }
 
-pub fn apply_theme(theme: &std::rc::Rc<gpui_kit::component::ThemeConfig>, cx: &mut gpui_kit::App) {
-    let fallback_radius = cx.global::<Config>().corner_radius;
-    gpui_kit::component::Theme::update(cx, |current| {
-        current.apply_config(theme);
-        if theme.radius.is_none() {
-            current.radius = gpui_kit::px(fallback_radius);
-            current.radius_lg = gpui_kit::px((fallback_radius * 1.5).round());
-        }
-    });
-}
-
-impl Global for Config {}
-
+#[derive(Clone)]
 pub struct AudioPlayer {
-    pub sender: std::sync::mpsc::Sender<AudioCommand>,
+    pub sender: Option<std::sync::mpsc::Sender<AudioCommand>>,
     pub current_track: Option<Track>,
     pub is_playing: bool,
     pub progress_ms: Arc<AtomicU64>,
 }
+
+impl Default for AudioPlayer {
+    fn default() -> Self {
+        Self {
+            sender: None,
+            current_track: None,
+            is_playing: false,
+            progress_ms: Arc::new(AtomicU64::new(0)),
+        }
+    }
+}
+
 impl AudioPlayer {
     pub fn new(sender: std::sync::mpsc::Sender<AudioCommand>, progress_ms: Arc<AtomicU64>) -> Self {
         Self {
-            sender,
+            sender: Some(sender),
             current_track: None,
             is_playing: false,
             progress_ms,
@@ -74,11 +85,9 @@ impl AudioPlayer {
     }
 }
 
-impl Global for AudioPlayer {}
-
 #[derive(Clone, PartialEq, Debug)]
 pub enum TrackSource {
-    Local(std::path::PathBuf),
+    Local(PathBuf),
     Stream {
         provider: String,
         id: String,
@@ -87,7 +96,7 @@ pub enum TrackSource {
     },
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Track {
     pub id: u64,
     pub title: String,
@@ -96,6 +105,7 @@ pub struct Track {
     pub duration_secs: u32,
     pub source: TrackSource,
 }
+
 impl Track {
     pub fn local_path(&self) -> Option<&Path> {
         match &self.source {
@@ -103,6 +113,7 @@ impl Track {
             TrackSource::Stream { .. } => None,
         }
     }
+
     pub fn display_title(&self, shorten: bool) -> String {
         if shorten {
             clean_title(&self.title, &self.artist)
@@ -112,33 +123,26 @@ impl Track {
     }
 }
 
-#[derive(Clone, PartialEq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum TrackListSource {
     LocalLibrary,
     Playlist(u64),
     Album(u64),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Default, Debug)]
 pub struct CurrentTrackList {
     pub source: Option<TrackListSource>,
     pub tracks: Option<Vec<Track>>,
     pub selected_id: Option<u64>,
+    pub load_error: Option<String>,
 }
+
 impl CurrentTrackList {
     pub fn new() -> Self {
-        Self {
-            source: None,
-            tracks: None,
-            selected_id: None,
-        }
+        Self::default()
     }
 }
-
-impl Global for CurrentTrackList {}
-
-pub struct MediaControl(pub souvlaki::MediaControls);
-impl Global for MediaControl {}
 
 #[derive(Debug, Clone)]
 pub enum UiMediaEvent {
@@ -151,41 +155,6 @@ pub enum UiMediaEvent {
     Next,
     Previous,
     TrackEnded,
-}
-
-impl MediaControl {
-    pub fn update_track(&mut self, track: &Track) {
-        let _ = self.0.set_metadata(souvlaki::MediaMetadata {
-            title: Some(&track.title),
-            artist: Some(&track.artist),
-            album: Some(&track.album),
-            duration: Some(std::time::Duration::from_secs(track.duration_secs as u64)),
-            cover_url: None,
-        });
-        let _ = self
-            .0
-            .set_playback(souvlaki::MediaPlayback::Playing { progress: None });
-    }
-
-    pub fn set_playback(&mut self, is_playing: bool) {
-        let playback = if is_playing {
-            souvlaki::MediaPlayback::Playing { progress: None }
-        } else {
-            souvlaki::MediaPlayback::Paused { progress: None }
-        };
-        let _ = self.0.set_playback(playback);
-    }
-
-    pub fn set_volume(&mut self, volume: f64) {
-        #[cfg(all(unix, not(target_os = "macos")))]
-        {
-            let _ = self.0.set_volume(volume);
-        }
-        #[cfg(not(all(unix, not(target_os = "macos"))))]
-        {
-            let _ = volume;
-        }
-    }
 }
 
 pub use crate::discord::{DiscordCommand, DiscordRpc};

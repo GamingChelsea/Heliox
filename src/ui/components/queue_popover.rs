@@ -1,396 +1,386 @@
+use nsh_core::prelude::*;
+
 use crate::{
-    model::{AudioPlayer, Config, Track},
+    model::{AudioPlayer, Config},
     player::play_track,
     queue::{QueueManager, QueueTab},
-    ui::components::cover::{cover_art, cover_art_sized},
-};
-use gpui_kit::{
-    assets::IconName,
-    base::{h_flex, v_flex},
-    component::{
-        ActiveTheme,
-        scroll::{Scrollbar, ScrollbarMode},
-        tab::{Tab, TabBar},
+    ui::{
+        components::cover::cover_art,
+        icons::{IconName, icon_elem},
+        theme::{AppRadius, Clickable, Finish, Finished, colors, motion},
     },
-    prelude::FluentBuilder,
-    *,
 };
 
-#[derive(Clone, Copy, Debug)]
-pub struct DraggedQueueIndex(pub usize);
+#[derive(Clone, Copy, Default)]
+pub struct QueuePopoverOpen(pub bool);
 
-pub struct DragPreview {
-    title: String,
+#[derive(Clone, Copy, Default)]
+struct QueuePopoverPresence {
+    mounted: bool,
+    generation: u64,
 }
 
-impl Render for DragPreview {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        div()
-            .px_3()
-            .py_1()
-            .bg(cx.theme().secondary)
-            .border_1()
-            .border_color(cx.theme().border)
-            .rounded(cx.theme().radius)
-            .shadow_md()
-            .text_xs()
-            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-            .child(self.title.clone())
+#[derive(Clone, Copy, Default)]
+struct QueuePopoverAnimations {
+    panel: Option<Motion>,
+    content: Option<Motion>,
+    indicator: Option<AnimatedValue>,
+}
+
+pub fn toggle_queue_popover() {
+    if global::<QueuePopoverOpen>().get_untracked().0 {
+        global::<QueuePopoverOpen>().set(QueuePopoverOpen(false));
+        global::<QueuePopoverPresence>().update(|presence| {
+            presence.generation = presence.generation.wrapping_add(1);
+        });
+        let generation = global::<QueuePopoverPresence>().get_untracked().generation;
+
+        if let Some(panel) = global::<QueuePopoverAnimations>().get_untracked().panel {
+            panel.play(MotionPreset::FadeOutDown);
+        }
+
+        if reduce_motion() {
+            global::<QueuePopoverPresence>().update(|presence| presence.mounted = false);
+        } else {
+            set_timeout(std::time::Duration::from_millis(300), move || {
+                global::<QueuePopoverPresence>().update(|presence| {
+                    if presence.generation == generation
+                        && !global::<QueuePopoverOpen>().get_untracked().0
+                    {
+                        presence.mounted = false;
+                    }
+                });
+            });
+        }
+    } else {
+        global::<QueuePopoverPresence>().update(|presence| {
+            presence.mounted = true;
+            presence.generation = presence.generation.wrapping_add(1);
+        });
+        if let Some(panel) = global::<QueuePopoverAnimations>().get_untracked().panel {
+            panel.value(MotionChannel::Opacity).set(0.0);
+            panel.value(MotionChannel::TranslateY).set(24.0);
+            panel.play(MotionPreset::FadeInUp);
+        }
+        global::<QueuePopoverOpen>().set(QueuePopoverOpen(true));
     }
 }
 
-#[derive(IntoElement)]
-pub struct QueuePopover;
-
-impl QueuePopover {
-    pub fn new() -> Self {
-        Self
+pub fn queue_popover() -> impl IntoElement {
+    let panel = motion();
+    let content = motion();
+    let indicator = animated_value(0.0);
+    if global::<QueueManager>().get_untracked().active_tab == QueueTab::History {
+        indicator.set(163.0);
     }
+    global::<QueuePopoverAnimations>().set(QueuePopoverAnimations {
+        panel: Some(panel),
+        content: Some(content),
+        indicator: Some(indicator),
+    });
+    dynamic(move || queue_popover_view(panel, content, indicator))
 }
 
-impl RenderOnce for QueuePopover {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let queue_scroll = window
-            .use_keyed_state("queue-scroll-handle", cx, |_, _| ScrollHandle::default())
-            .read(cx)
-            .clone();
-        let history_scroll = window
-            .use_keyed_state("history-scroll-handle", cx, |_, _| ScrollHandle::default())
-            .read(cx)
-            .clone();
-        let current_track = cx.global::<AudioPlayer>().current_track.clone();
-        let queue_items = cx.global::<QueueManager>().queue.clone();
-        let active_tab = cx.global::<QueueManager>().active_tab;
-        let shorten = cx.global::<Config>().shorten_titles;
-        let index_tab = match active_tab {
-            QueueTab::Queue => 0,
-            QueueTab::History => 1,
-        };
+fn queue_popover_view(
+    panel_motion: Motion,
+    content_motion: Motion,
+    indicator_motion: AnimatedValue,
+) -> impl IntoElement {
+    if !global::<QueuePopoverPresence>().get().mounted {
+        return view().into_element();
+    }
 
-        v_flex()
-            .w(px(390.0))
-            .min_h(px(260.0))
-            .gap_3()
-            // Tab Bar
+    let is_open = global::<QueuePopoverOpen>().get().0;
+    let qm = global::<QueueManager>().get();
+    let current_track = global::<AudioPlayer>().get().current_track;
+    let shorten = global::<Config>().get().shorten_titles;
+    let active_tab = qm.active_tab;
+
+    let tab_button = |title: &'static str, tab: QueueTab| {
+        view()
+            .flex_1()
+            .h(px(32.0))
+            .items_center()
+            .justify_center()
+            .app_radius(0.75)
+            .clickable()
+            .label(title)
+            .on_press(move || {
+                select_queue_tab(tab);
+            })
             .child(
-                TabBar::new("queue-tab")
-                    .underline()
-                    .selected_index(index_tab)
-                    .on_click(|ix, window, cx| {
-                        let new_tab = match *ix {
-                            0 => QueueTab::Queue,
-                            _ => QueueTab::History,
-                        };
-                        cx.update_global::<QueueManager, _>(|qm, _cx| {
-                            qm.active_tab = new_tab;
-                        });
-                        window.refresh();
+                text(title)
+                    .text_size(px(13.0))
+                    .font_weight(if active_tab == tab {
+                        FontWeight::SEMIBOLD
+                    } else {
+                        FontWeight::MEDIUM
                     })
-                    .child(Tab::new().label("Queue"))
-                    .child(Tab::new().label("History")),
+                    .text_color(move || {
+                        if global::<QueueManager>().get().active_tab == tab {
+                            colors::TEXT
+                        } else {
+                            colors::MUTED
+                        }
+                    }),
             )
-            // Main Content
-            .child(match active_tab {
-                QueueTab::Queue => v_flex()
-                    .gap_2()
-                    .when_some(current_track, |this, track| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child("Currently playing"),
+    };
+
+    let content = match active_tab {
+        QueueTab::Queue => {
+            let current_view = current_track.map(|track| {
+                let title = track.display_title(shorten);
+                view()
+                    .p(px(10.0))
+                    .app_radius(1.0)
+                    .bg(colors::INSET)
+                    .mb(px(8.0))
+                    .child(
+                        text("Now Playing")
+                            .text_size(px(11.0))
+                            .font_weight(FontWeight::BOLD)
+                            .text_color(colors::ACCENT)
+                            .mb(px(4.0)),
+                    )
+                    .child(
+                        view()
+                            .flex_row()
+                            .items_center()
+                            .gap(px(10.0))
+                            .child(cover_art(40.0))
+                            .child(
+                                view()
+                                    .flex_1()
+                                    .gap(px(2.0))
+                                    .child(
+                                        text(title)
+                                            .number_of_lines(1)
+                                            .text_size(px(13.0))
+                                            .font_weight(FontWeight::SEMIBOLD)
+                                            .text_color(colors::TEXT),
+                                    )
+                                    .child(
+                                        text(track.artist)
+                                            .number_of_lines(1)
+                                            .text_size(px(12.0))
+                                            .text_color(colors::MUTED),
+                                    ),
+                            ),
+                    )
+            });
+
+            let items: Vec<_> = qm
+                .queue
+                .iter()
+                .enumerate()
+                .map(|(idx, item)| {
+                    let track = item.track.clone();
+                    let title = track.display_title(shorten);
+                    let track_clone = track.clone();
+
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .h(px(40.0))
+                        .px(px(8.0))
+                        .gap(px(10.0))
+                        .app_radius(0.75)
+                        .clickable()
+                        .label(title.clone())
+                        .on_press(move || {
+                            play_track(track_clone.clone());
+                        })
+                        .child(
+                            text((idx + 1).to_string())
+                                .w(px(24.0))
+                                .text_size(px(12.0))
+                                .text_color(colors::FAINT),
                         )
                         .child(
-                            h_flex()
-                                .w_full()
-                                .p_2()
-                                .gap_2()
-                                .items_center()
-                                .bg(cx.theme().secondary)
-                                .rounded(cx.theme().radius)
-                                .child(cover_art(cx))
+                            view()
+                                .flex_1()
+                                .gap(px(1.0))
                                 .child(
-                                    v_flex()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                                .truncate()
-                                                .child(track.display_title(shorten)),
-                                        )
-                                        .child(
-                                            div()
-                                                .text_xs()
-                                                .text_color(cx.theme().muted_foreground)
-                                                .truncate()
-                                                .child(
-                                                    if track.album.is_empty()
-                                                        || track.album == track.title
-                                                    {
-                                                        track.artist.clone()
-                                                    } else {
-                                                        format!(
-                                                            "{} • {}",
-                                                            track.artist, track.album
-                                                        )
-                                                    },
-                                                ),
-                                        ),
+                                    text(title)
+                                        .number_of_lines(1)
+                                        .text_size(px(13.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(colors::TEXT),
+                                )
+                                .child(
+                                    text(track.artist)
+                                        .number_of_lines(1)
+                                        .text_size(px(11.0))
+                                        .text_color(colors::MUTED),
                                 ),
                         )
-                    })
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("Next in queue"),
-                    )
-                    .child(if queue_items.is_empty() {
-                        div()
-                            .p_3()
-                            .text_xs()
-                            .text_center()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("No tracks in queue")
-                            .into_any_element()
-                    } else {
-                        scroll_list(
-                            &queue_scroll,
-                            "queue-items-scroll",
-                            px(260.0),
-                            queue_items.iter().enumerate().map(|(idx, item)| {
-                                let track = item.track.clone();
-                                let track_title = track.display_title(shorten);
-                                let track_sub =
-                                    if track.album.is_empty() || track.album == track.title {
-                                        track.artist.clone()
-                                    } else {
-                                        format!("{} • {}", track.artist, track.album)
-                                    };
-                                let preview_title = track_title.clone();
+                })
+                .collect();
 
-                                h_flex()
-                                    .id(ElementId::NamedInteger("queue-item".into(), item.id))
-                                    .w_full()
-                                    .px_2()
-                                    .py(px(4.0))
-                                    .gap_2()
-                                    .items_center()
-                                    .rounded(cx.theme().radius)
-                                    .hover(|s| s.bg(cx.theme().accent.opacity(0.3)))
-                                    .drag_over::<DraggedQueueIndex>(|style, _data, _window, cx| {
-                                        style
-                                            .bg(cx.theme().accent.opacity(0.5))
-                                            .border_t_2()
-                                            .border_color(cx.theme().primary)
-                                    })
-                                    .on_drop::<DraggedQueueIndex>(move |dragged, window, cx| {
-                                        let from = dragged.0;
-                                        let to = idx;
-                                        cx.update_global::<QueueManager, _>(|qm, _cx| {
-                                            qm.move_item(from, to);
-                                        });
-                                        window.refresh();
-                                    })
-                                    .child(
-                                        div()
-                                            .id(ElementId::NamedInteger(
-                                                "queue-drag-grip".into(),
-                                                item.id,
-                                            ))
-                                            .cursor_grab()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .hover(|s| s.text_color(cx.theme().foreground))
-                                            .on_drag(DraggedQueueIndex(idx), {
-                                                let title = preview_title.clone();
-                                                move |_dragged, _pos, _window, cx| {
-                                                    cx.new(|_cx| DragPreview {
-                                                        title: title.clone(),
-                                                    })
-                                                }
-                                            })
-                                            .child(IconName::GripVertical),
-                                    )
-                                    .child(cover_art_sized(
-                                        ElementId::NamedInteger("queue-thumb".into(), item.id),
-                                        px(36.0),
-                                        cx,
-                                    ))
-                                    .child(
-                                        v_flex()
-                                            .id(ElementId::NamedInteger(
-                                                "queue-track-click".into(),
-                                                item.id,
-                                            ))
-                                            .flex_1()
-                                            .min_w_0()
-                                            .cursor_pointer()
-                                            .on_click({
-                                                let track_clone = track.clone();
-                                                move |_event, _window, cx| {
-                                                    let curr = cx
-                                                        .global::<AudioPlayer>()
-                                                        .current_track
-                                                        .clone();
-                                                    let to_play = cx
-                                                        .update_global::<QueueManager, _>(
-                                                            |qm, _cx| qm.play_queue_at(idx, curr),
-                                                        );
-                                                    if let Some(t) = to_play {
-                                                        play_track(t, cx);
-                                                    } else {
-                                                        play_track(track_clone.clone(), cx);
-                                                    }
-                                                }
-                                            })
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                                    .truncate()
-                                                    .child(track_title),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .truncate()
-                                                    .child(track_sub),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(ElementId::NamedInteger(
-                                                "queue-remove-btn".into(),
-                                                item.id,
-                                            ))
-                                            .cursor_pointer()
-                                            .text_color(cx.theme().muted_foreground)
-                                            .hover(|s| s.text_color(cx.theme().foreground))
-                                            .on_click(move |_event, window, cx| {
-                                                cx.update_global::<QueueManager, _>(|qm, _cx| {
-                                                    qm.remove_at(idx);
-                                                });
-                                                window.refresh();
-                                            })
-                                            .child(IconName::X),
-                                    )
-                            }),
+            view()
+                .children(current_view)
+                .child(
+                    text(format!("Next Up ({})", items.len()))
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors::MUTED)
+                        .mb(px(4.0)),
+                )
+                .child(scroll().h(px(260.0)).child(view().children(items)))
+        }
+        QueueTab::History => {
+            let items: Vec<_> = qm
+                .history
+                .iter()
+                .rev()
+                .enumerate()
+                .map(|(idx, track)| {
+                    let track_clone = track.clone();
+                    let title = track.display_title(shorten);
+
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .h(px(40.0))
+                        .px(px(8.0))
+                        .gap(px(10.0))
+                        .app_radius(0.75)
+                        .clickable()
+                        .label(title.clone())
+                        .on_press(move || {
+                            play_track(track_clone.clone());
+                        })
+                        .child(
+                            text((idx + 1).to_string())
+                                .w(px(24.0))
+                                .text_size(px(12.0))
+                                .text_color(colors::FAINT),
                         )
-                    })
-                    .into_any_element(),
-                QueueTab::History => {
-                    let history_tracks: Vec<Track> = cx
-                        .global::<QueueManager>()
-                        .history
-                        .iter()
-                        .rev()
-                        .cloned()
-                        .collect();
-
-                    if history_tracks.is_empty() {
-                        div()
-                            .p_4()
-                            .text_xs()
-                            .text_center()
-                            .text_color(cx.theme().muted_foreground)
-                            .child("No listening history yet")
-                            .into_any_element()
-                    } else {
-                        scroll_list(
-                            &history_scroll,
-                            "history-items-scroll",
-                            px(300.0),
-                            history_tracks.into_iter().enumerate().map(|(idx, track)| {
-                                let track_title = track.display_title(shorten);
-                                let track_sub =
-                                    if track.album.is_empty() || track.album == track.title {
-                                        track.artist.clone()
-                                    } else {
-                                        format!("{} • {}", track.artist, track.album)
-                                    };
-                                let track_clone = track.clone();
-
-                                h_flex()
-                                    .id(ElementId::NamedInteger(
-                                        "history-item".into(),
-                                        track.id ^ (idx as u64),
-                                    ))
-                                    .w_full()
-                                    .px_2()
-                                    .py(px(4.0))
-                                    .gap_2()
-                                    .items_center()
-                                    .rounded(cx.theme().radius)
-                                    .cursor_pointer()
-                                    .hover(|s| s.bg(cx.theme().accent.opacity(0.3)))
-                                    .on_click(move |_event, _window, cx| {
-                                        play_track(track_clone.clone(), cx);
-                                    })
-                                    .child(cover_art_sized(
-                                        ElementId::NamedInteger(
-                                            "history-thumb".into(),
-                                            track.id ^ (idx as u64),
-                                        ),
-                                        px(36.0),
-                                        cx,
-                                    ))
-                                    .child(
-                                        v_flex()
-                                            .flex_1()
-                                            .min_w_0()
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                                    .truncate()
-                                                    .child(track_title),
-                                            )
-                                            .child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().muted_foreground)
-                                                    .truncate()
-                                                    .child(track_sub),
-                                            ),
-                                    )
-                            }),
+                        .child(
+                            view()
+                                .flex_1()
+                                .gap(px(1.0))
+                                .child(
+                                    text(title)
+                                        .number_of_lines(1)
+                                        .text_size(px(13.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(colors::TEXT),
+                                )
+                                .child(
+                                    text(track.artist.clone())
+                                        .number_of_lines(1)
+                                        .text_size(px(11.0))
+                                        .text_color(colors::MUTED),
+                                ),
                         )
-                    }
-                }
-            })
-    }
+                })
+                .collect();
+
+            view()
+                .child(
+                    text(format!("History ({})", items.len()))
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors::MUTED)
+                        .mb(px(4.0)),
+                )
+                .child(scroll().h(px(320.0)).child(view().children(items)))
+        }
+    };
+
+    // Popover overlay card positioned in bottom right above player bar
+    view()
+        .absolute()
+        .right(px(16.0))
+        .bottom(px(88.0))
+        .w(px(360.0))
+        .p(px(14.0))
+        .app_radius(1.5)
+        .finish(Finish::Card)
+        .border_1()
+        .border_color(colors::BORDER)
+        .pointer_events(if is_open {
+            PointerEvents::Auto
+        } else {
+            PointerEvents::None
+        })
+        .bind_motion(&panel_motion)
+        // Header
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .mb(px(12.0))
+                .child(
+                    text("Play Queue")
+                        .text_size(px(16.0))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(colors::TEXT),
+                )
+                .child(
+                    view()
+                        .size(px(24.0))
+                        .items_center()
+                        .justify_center()
+                        .app_radius(1.5)
+                        .clickable()
+                        .label("Close queue")
+                        .on_press(toggle_queue_popover)
+                        .child(icon_elem(IconName::Cross, 14.0, colors::MUTED)),
+                ),
+        )
+        // Tabs
+        .child(
+            view()
+                .relative()
+                .flex_row()
+                .h(px(36.0))
+                .p(px(2.0))
+                .bg(colors::INSET)
+                .app_radius(1.0)
+                .mb(px(12.0))
+                .child(
+                    view()
+                        .absolute()
+                        .left(px(2.0))
+                        .top(px(2.0))
+                        .w(px(163.0))
+                        .h(px(32.0))
+                        .app_radius(0.75)
+                        .finish(Finish::Raised)
+                        .bind_transform(nsh_core::TransformKind::TranslateX, &indicator_motion),
+                )
+                .child(tab_button("Queue", QueueTab::Queue))
+                .child(tab_button("History", QueueTab::History)),
+        )
+        // Content
+        .child(view().bind_motion(&content_motion).child(content))
+        .into_element()
 }
 
-fn scroll_list(
-    handle: &ScrollHandle,
-    id: &'static str,
-    max_h: Pixels,
-    children: impl IntoIterator<Item = impl IntoElement>,
-) -> AnyElement {
-    div()
-        .relative()
-        .w_full()
-        .child(
-            v_flex()
-                .id(id)
-                .w_full()
-                .max_h(max_h)
-                .gap_1()
-                .pr_3()
-                .overflow_y_scroll()
-                .track_scroll(handle)
-                .children(children),
-        )
-        .child(
-            div().absolute().inset_0().child(
-                Scrollbar::vertical(handle)
-                    .id(SharedString::from(format!("{}-bar", id)))
-                    .mode(ScrollbarMode::Hover)
-                    .viewport_from_layout(),
-            ),
-        )
-        .into_any_element()
+fn select_queue_tab(tab: QueueTab) {
+    if global::<QueueManager>().get_untracked().active_tab == tab {
+        return;
+    }
+
+    let animations = global::<QueuePopoverAnimations>().get_untracked();
+    if let Some(indicator) = animations.indicator {
+        let target = if tab == QueueTab::Queue { 0.0 } else { 163.0 };
+        if reduce_motion() {
+            indicator.set(target);
+        } else {
+            indicator.spring(target, motion::SETTLE);
+        }
+    }
+
+    if let Some(content) = animations.content {
+        content.value(MotionChannel::Opacity).set(0.0);
+        content.value(MotionChannel::TranslateY).set(24.0);
+    }
+    global::<QueueManager>().update(|manager| manager.active_tab = tab);
+    if let Some(content) = animations.content {
+        content.play(MotionPreset::FadeInUp);
+    }
 }

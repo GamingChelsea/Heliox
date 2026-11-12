@@ -1,11 +1,10 @@
-use gpui_kit::{Global, assets::IconName};
+use nsh_core::prelude::*;
 use std::collections::VecDeque;
 use strum::{EnumIter, IntoEnumIterator};
 
 #[derive(Clone, Copy, Debug)]
 pub struct RouteMeta {
     pub name: &'static str,
-    pub icon: IconName,
     pub no_input: bool,
 }
 
@@ -17,49 +16,55 @@ pub enum NavigationRoute {
     TestPage { message: String },
     Settings,
 }
+
 impl NavigationRoute {
-    // Get all routes which don't require a input
     pub fn get_clean_routes() -> Vec<NavigationRoute> {
         Self::iter().filter(|route| route.meta().no_input).collect()
     }
 
-    pub const fn meta(&self) -> RouteMeta {
+    pub fn meta(&self) -> RouteMeta {
         match self {
             NavigationRoute::Home => RouteMeta {
                 name: "Home",
-                icon: IconName::House,
                 no_input: true,
             },
             NavigationRoute::Search => RouteMeta {
                 name: "Search",
-                icon: IconName::Search,
                 no_input: true,
             },
             NavigationRoute::LocalLibrary => RouteMeta {
                 name: "Local Library",
-                icon: IconName::Library,
                 no_input: true,
             },
             NavigationRoute::TestPage { .. } => RouteMeta {
                 name: "Test Page",
-                icon: IconName::TestTube,
                 no_input: false,
             },
             NavigationRoute::Settings => RouteMeta {
                 name: "Settings",
-                icon: IconName::Settings,
                 no_input: true,
             },
         }
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct NavigationHistory {
     pub history: VecDeque<NavigationRoute>,
     pub current: NavigationRoute,
     pub future: VecDeque<NavigationRoute>,
 }
+
+impl Default for NavigationHistory {
+    fn default() -> Self {
+        Self {
+            history: VecDeque::new(),
+            current: NavigationRoute::Home,
+            future: VecDeque::new(),
+        }
+    }
+}
+
 impl NavigationHistory {
     pub fn new(current: NavigationRoute) -> Self {
         Self {
@@ -105,4 +110,17 @@ impl NavigationHistory {
     }
 }
 
-impl Global for NavigationHistory {}
+pub fn navigate_to(route: NavigationRoute) {
+    if route == NavigationRoute::LocalLibrary {
+        crate::library::load_local_library();
+    }
+    global::<NavigationHistory>().update(|nav| nav.push(route));
+}
+
+pub fn go_back() {
+    global::<NavigationHistory>().update(|nav| nav.go_back());
+}
+
+pub fn go_forward() {
+    global::<NavigationHistory>().update(|nav| nav.go_forward());
+}

@@ -1,47 +1,49 @@
 use crate::{
-    model::Config,
+    discord::toggle_discord_rpc,
     player::{play_next, play_prev, stop, toggle_play},
-    router::NavigationHistory,
-};
-use gpui_kit::{
-    App, BorrowAppContext, Entity, Window,
-    assets::IconName,
-    component::{WindowExt, command::CommandState},
+    router::{go_back, go_forward},
+    ui::icons::IconName,
 };
 
 pub struct PaletteAction {
+    pub id: &'static str,
     pub label: &'static str,
     pub icon: IconName,
+    pub shortcut: Option<&'static str>,
     pub keywords: &'static [&'static str],
-    pub execute: fn(&Entity<CommandState>, &mut Window, &mut App),
+    pub execute: fn(),
 }
 
 pub fn search_actions() -> Vec<PaletteAction> {
     vec![
         PaletteAction {
+            id: "search:all",
             label: "Search on YouTube",
             icon: IconName::Search,
+            shortcut: Some("search"),
             keywords: &["yt", "search"],
-            execute: |cmd, window, cx| {
-                cmd.update(cx, |state, cx| state.set_query("search ", window, cx));
+            execute: || {
+                super::set_query("search ");
             },
         },
         PaletteAction {
+            id: "search:songs",
             label: "Search only songs on YouTube",
             icon: IconName::Search,
+            shortcut: Some("search:songs"),
             keywords: &["yt", "search songs"],
-            execute: |cmd, window, cx| {
-                cmd.update(cx, |state, cx| state.set_query("search:songs ", window, cx));
+            execute: || {
+                super::set_query("search:songs ");
             },
         },
         PaletteAction {
+            id: "search:videos",
             label: "Search only videos on YouTube",
             icon: IconName::Search,
+            shortcut: Some("search:videos"),
             keywords: &["yt", "search videos"],
-            execute: |cmd, window, cx| {
-                cmd.update(cx, |state, cx| {
-                    state.set_query("search:videos ", window, cx)
-                });
+            execute: || {
+                super::set_query("search:videos ");
             },
         },
     ]
@@ -50,48 +52,57 @@ pub fn search_actions() -> Vec<PaletteAction> {
 pub fn playback_actions() -> Vec<PaletteAction> {
     vec![
         PaletteAction {
-            label: "Resume/Pause the current playback",
+            id: "play:toggle",
+            label: "Resume/Pause current playback",
             icon: IconName::Play,
+            shortcut: None,
             keywords: &["play", "resume", "pause"],
-            execute: |_cmd, window, cx| {
-                toggle_play(cx);
-                window.close_dialog(cx);
+            execute: || {
+                toggle_play();
+                super::close();
             },
         },
         PaletteAction {
-            label: "Play the previous track",
+            id: "play:previous",
+            label: "Play previous track",
             icon: IconName::SkipBack,
+            shortcut: None,
             keywords: &["prev", "previous"],
-            execute: |_cmd, window, cx| {
-                play_prev(cx);
-                window.close_dialog(cx);
+            execute: || {
+                play_prev();
+                super::close();
             },
         },
         PaletteAction {
-            label: "Play the next track",
+            id: "play:next",
+            label: "Play next track",
             icon: IconName::SkipForward,
+            shortcut: None,
             keywords: &["next", "advance"],
-            execute: |_cmd, window, cx| {
-                play_next(cx);
-                window.close_dialog(cx);
+            execute: || {
+                play_next();
+                super::close();
             },
         },
         PaletteAction {
-            label: "Stop the current playback",
-            icon: IconName::CircleStop,
+            id: "play:stop",
+            label: "Stop playback",
+            icon: IconName::Cross,
+            shortcut: None,
             keywords: &["stop"],
-            execute: |_cmd, window, cx| {
-                stop(cx);
-                window.close_dialog(cx);
+            execute: || {
+                stop();
+                super::close();
             },
         },
         PaletteAction {
+            id: "repeat:choose",
             label: "Change Repeat Mode",
             icon: IconName::Repeat,
+            shortcut: Some("crm"),
             keywords: &["crm", "repeat"],
-            execute: |command, window, cx| {
-                command.update(cx, |state, cx| state.set_query("crm ", window, cx));
-                window.refresh();
+            execute: || {
+                super::set_query("crm ");
             },
         },
     ]
@@ -100,80 +111,71 @@ pub fn playback_actions() -> Vec<PaletteAction> {
 pub fn navigation_actions() -> Vec<PaletteAction> {
     vec![
         PaletteAction {
-            label: "Navigate to specific page",
-            icon: IconName::Navigation,
+            id: "navigation:choose",
+            label: "Navigate to page",
+            icon: IconName::House,
+            shortcut: Some("nav"),
             keywords: &["nav", "navigate"],
-            execute: |command, window, cx| {
-                command.update(cx, |state, cx| state.set_query("nav ", window, cx));
-                window.refresh();
+            execute: || {
+                super::set_query("nav ");
             },
         },
         PaletteAction {
+            id: "navigation:forward",
             label: "Navigate forward",
-            icon: IconName::ArrowRight,
+            icon: IconName::ChevronRight,
+            shortcut: None,
             keywords: &["fw", "forward"],
-            execute: |_cmd, _window, cx| {
-                cx.update_global::<NavigationHistory, _>(|history, _cx| {
-                    history.go_forward();
-                });
+            execute: || {
+                go_forward();
+                super::close();
             },
         },
         PaletteAction {
+            id: "navigation:backward",
             label: "Navigate backward",
-            icon: IconName::ArrowLeft,
+            icon: IconName::ChevronLeft,
+            shortcut: None,
             keywords: &["bw", "backward"],
-            execute: |_cmd, _window, cx| {
-                cx.update_global::<NavigationHistory, _>(|history, _cx| {
-                    history.go_back();
-                });
+            execute: || {
+                go_back();
+                super::close();
             },
         },
     ]
 }
 
-pub fn app_actions(cx: &App) -> Vec<PaletteAction> {
-    let discord_enabled = cx.global::<Config>().discord_rpc;
-    let discord_icon = if discord_enabled {
-        IconName::ToggleRight
-    } else {
-        IconName::ToggleLeft
-    };
-
+pub fn app_actions() -> Vec<PaletteAction> {
     vec![
         PaletteAction {
+            id: "theme:choose",
             label: "Change Theme",
-            icon: IconName::Palette,
+            icon: IconName::Spark,
+            shortcut: Some("ct"),
             keywords: &["ct", "theme"],
-            execute: |command, window, cx| {
-                command.update(cx, |state, cx| state.set_query("ct ", window, cx));
-                window.refresh();
+            execute: || {
+                super::set_query("ct ");
             },
         },
         PaletteAction {
+            id: "discord:toggle",
             label: "Toggle Discord RPC",
-            icon: discord_icon,
+            icon: IconName::Settings,
+            shortcut: None,
             keywords: &["dc", "discord"],
-            execute: |_cmd, window, cx| {
-                crate::discord::toggle_discord_rpc(cx);
-                window.close_dialog(cx);
-            },
-        },
-        PaletteAction {
-            label: "Quit the App",
-            icon: IconName::Power,
-            keywords: &["quit", "exit", "close"],
-            execute: |_cmd, _window, cx| {
-                cx.quit();
+            execute: || {
+                toggle_discord_rpc();
+                super::close();
             },
         },
     ]
 }
 
-pub fn all_action_groups(cx: &App) -> Vec<(&'static str, Vec<PaletteAction>)> {
+pub fn all_action_groups() -> Vec<(&'static str, Vec<PaletteAction>)> {
     vec![
         ("Search", search_actions()),
         ("Playback", playback_actions()),
         ("Navigation", navigation_actions()),
-        ("App", app_actions(cx)),
+        ("App", app_actions()),
     ]
 }

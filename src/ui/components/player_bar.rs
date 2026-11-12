@@ -1,268 +1,266 @@
+use nsh_base::button;
+use nsh_core::prelude::*;
+
 use crate::{
     audio::AudioCommand,
-    model::{AudioPlayer, Config, MediaControl},
+    model::{AudioPlayer, Config},
     player::{play_next, play_prev, toggle_play, toggle_repeat},
-    queue::QueueManager,
+    queue::{QueueManager, RepeatMode},
     save_config,
-    ui::components::{audio_slider::AudioSlider, cover::cover_art, queue_popover::QueuePopover},
+    ui::{
+        components::{
+            audio_slider::{audio_slider, seek_slider},
+            cover::cover_art,
+            queue_popover::toggle_queue_popover,
+        },
+        icons::{IconName, icon_elem},
+        theme::{Finish, Finished, Pressable, colors},
+    },
 };
-use gpui_kit::{
-    assets::IconName,
-    base::{Selectable, h_flex, v_flex},
-    component::{ActiveTheme, button::Button, popover::Popover},
-    *,
-};
-
-#[derive(IntoElement)]
-pub struct PlayerBar;
-
-impl PlayerBar {
-    pub fn new() -> Self {
-        Self
-    }
-}
-
-impl RenderOnce for PlayerBar {
-    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let volume = cx.global::<Config>().volume;
-
-        let (current_track, is_playing, progress_ms) =
-            cx.read_global::<AudioPlayer, _>(|player, _cx| {
-                (
-                    player.current_track.clone(),
-                    player.is_playing,
-                    player.progress_ms.clone(),
-                )
-            });
-        let shorten = cx.global::<Config>().shorten_titles;
-        let title: SharedString = current_track
-            .as_ref()
-            .map(|t| t.display_title(shorten).into())
-            .unwrap_or_else(|| "No track playing".into());
-        let subtitle: SharedString = current_track
-            .as_ref()
-            .map(|t| {
-                if t.album.is_empty() || t.album == t.title {
-                    t.artist.clone().into()
-                } else {
-                    format!("{} • {}", t.artist, t.album).into()
-                }
-            })
-            .unwrap_or_else(|| "".into());
-        let play_icon = if is_playing {
-            IconName::Pause
-        } else {
-            IconName::Play
-        };
-        let repeat_mode = cx.global::<QueueManager>().repeat_mode;
-        let repeat_icon = repeat_mode.icon();
-        let is_repeat_active = repeat_mode != crate::queue::RepeatMode::Off;
-
-        if is_playing {
-            window.use_keyed_state("playback-timer", cx, |window, cx| {
-                window
-                    .spawn(cx, async move |cx| {
-                        loop {
-                            cx.background_executor()
-                                .timer(std::time::Duration::from_millis(100))
-                                .await;
-                            let _ = cx.update(|window, _cx| {
-                                window.refresh();
-                            });
-                        }
-                    })
-                    .detach();
-            });
-        }
-
-        let current_secs = progress_ms.load(std::sync::atomic::Ordering::Relaxed) as f32 / 1000.0;
-        let total_secs = current_track.as_ref().map(|t| t.duration_secs).unwrap_or(0);
-        let progress = if total_secs > 0 {
-            (current_secs / total_secs as f32).clamp(0.0, 1.0)
-        } else {
-            0.0
-        };
-
-        h_flex()
-            .relative()
-            .h_20()
-            .w_full()
-            .items_center()
-            .justify_between()
-            .px_3()
-            .bg(cx.theme().sidebar)
-            .border_t_1()
-            .border_color(cx.theme().border)
-            // Left
-            .child(
-                h_flex()
-                    .w(px(260.0))
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .gap_3()
-                    .items_center()
-                    .child(cover_art(cx))
-                    .child(
-                        v_flex()
-                            .flex_1()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_left()
-                            .justify_center()
-                            .gap(px(2.0))
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .truncate()
-                                    .child(title),
-                            )
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(cx.theme().muted_foreground)
-                                    .truncate()
-                                    .child(subtitle),
-                            ),
-                    ),
-            )
-            // Middle
-            .child(
-                div()
-                    .absolute()
-                    .inset_0()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .child(
-                        v_flex()
-                            .w_full()
-                            .max_w(px(550.0))
-                            .items_center()
-                            .justify_center()
-                            .gap_1()
-                            .child(
-                                h_flex()
-                                    .gap_2()
-                                    .child(Button::new("Prev").icon(IconName::SkipBack).on_click(
-                                        |_event, _window, cx| {
-                                            play_prev(cx);
-                                        },
-                                    ))
-                                    .child(Button::new("Play").icon(play_icon).on_click(
-                                        |_event, _window, cx| {
-                                            toggle_play(cx);
-                                        },
-                                    ))
-                                    .child(
-                                        Button::new("Next").icon(IconName::SkipForward).on_click(
-                                            |_event, _window, cx| {
-                                                play_next(cx);
-                                            },
-                                        ),
-                                    ),
-                            )
-                            .child(
-                                h_flex()
-                                    .w_full()
-                                    .items_center()
-                                    .gap_2()
-                                    // Current time
-                                    .child(
-                                        div()
-                                            .w_10()
-                                            .h(px(16.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_end()
-                                            .text_xs()
-                                            .line_height(px(16.0))
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(format_time(current_secs as u32)),
-                                    )
-                                    // Bar
-                                    .child(
-                                        div().flex_1().h(px(16.0)).flex().items_center().child(
-                                            AudioSlider::new("playback-progress-slider", progress)
-                                                .on_change(move |new_val, window, cx| {
-                                                    let target_secs = new_val * total_secs as f32;
-                                                    let _ = cx
-                                                        .global::<AudioPlayer>()
-                                                        .sender
-                                                        .send(AudioCommand::Seek(target_secs));
-                                                    window.refresh();
-                                                }),
-                                        ),
-                                    )
-                                    // Total
-                                    .child(
-                                        div()
-                                            .w_10()
-                                            .h(px(16.0))
-                                            .flex()
-                                            .items_center()
-                                            .justify_start()
-                                            .text_xs()
-                                            .line_height(px(16.0))
-                                            .text_color(cx.theme().muted_foreground)
-                                            .child(format_time(total_secs)),
-                                    ),
-                            ),
-                    ),
-            )
-            // Right
-            .child(
-                h_flex()
-                    .w(px(260.0))
-                    .flex_shrink_0()
-                    .min_w_0()
-                    .justify_end()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        Button::new("repeat_icon")
-                            .icon(repeat_icon)
-                            .selected(is_repeat_active)
-                            .on_click(|_event, _window, cx| {
-                                toggle_repeat(cx);
-                            }),
-                    )
-                    .child(
-                        Popover::new("queue_popover")
-                            .anchor(Anchor::BottomCenter)
-                            .trigger(Button::new("queue_btn").icon(IconName::ListMusic).outline())
-                            .content(|_state, _window, _cx| QueuePopover::new()),
-                    )
-                    .child(div().w(px(80.0)).child(
-                        AudioSlider::new("player-volume-slider", volume).on_change(
-                            |new_vol, window, cx| {
-                                let _ = cx
-                                    .global::<AudioPlayer>()
-                                    .sender
-                                    .send(AudioCommand::SetVolume(new_vol));
-                                cx.update_global::<Config, _>(|config, _cx| {
-                                    config.volume = new_vol;
-                                    let _ = save_config(config);
-                                });
-                                cx.update_global::<MediaControl, _>(|mc, _cx| {
-                                    mc.set_volume(new_vol as f64);
-                                });
-                                window.refresh();
-                            },
-                        ),
-                    ))
-                    .child(
-                        div()
-                            .w_8()
-                            .text_xs()
-                            .text_right()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("{:.0}%", volume * 100.0)),
-                    ),
-            )
-    }
-}
 
 fn format_time(secs: u32) -> String {
     format!("{:02}:{:02}", secs / 60, secs % 60)
+}
+
+fn duration_secs() -> u32 {
+    global::<AudioPlayer>()
+        .get()
+        .current_track
+        .map_or(0, |track| track.duration_secs)
+}
+
+fn progress() -> f32 {
+    let player = global::<AudioPlayer>().get();
+    let duration = player
+        .current_track
+        .as_ref()
+        .map_or(0, |track| track.duration_secs);
+    if duration == 0 {
+        return 0.0;
+    }
+    let current_secs = player
+        .progress_ms
+        .load(std::sync::atomic::Ordering::Relaxed) as f32
+        / 1000.0;
+    (current_secs / duration as f32).clamp(0.0, 1.0)
+}
+
+pub fn player_bar() -> impl IntoElement {
+    view()
+        .flex_row()
+        .items_center()
+        .justify_between()
+        .h(px(80.0))
+        .w_full()
+        .px(px(16.0))
+        .bg(colors::SURFACE)
+        .border_t_1()
+        .border_t_color(colors::BORDER)
+        .child(dynamic(track_info))
+        .child(
+            view()
+                .flex_1()
+                .max_w(px(550.0))
+                .items_center()
+                .gap(px(6.0))
+                .child(dynamic(playback_controls))
+                .child(
+                    view()
+                        .flex_row()
+                        .items_center()
+                        .w_full()
+                        .gap(px(8.0))
+                        .child(dynamic(|| {
+                            text(format_time((progress() * duration_secs() as f32) as u32))
+                                .w(px(40.0))
+                                .text_right()
+                                .text_size(px(11.0))
+                                .text_color(colors::MUTED)
+                        }))
+                        .child(seek_slider(progress, |new_value| {
+                            let target_secs = new_value * duration_secs() as f32;
+                            if let Some(sender) = global::<AudioPlayer>().get_untracked().sender {
+                                let _ = sender.send(AudioCommand::Seek(target_secs));
+                            }
+                        }))
+                        .child(dynamic(|| {
+                            text(format_time(duration_secs()))
+                                .w(px(40.0))
+                                .text_left()
+                                .text_size(px(11.0))
+                                .text_color(colors::MUTED)
+                        })),
+                ),
+        )
+        .child(
+            view()
+                .flex_row()
+                .items_center()
+                .justify_end()
+                .w(px(260.0))
+                .gap(px(10.0))
+                .child(
+                    button()
+                        .size(px(32.0))
+                        .items_center()
+                        .justify_center()
+                        .rounded(px(6.0))
+                        .pressable()
+                        .accessibility_label("Queue")
+                        .on_press(toggle_queue_popover)
+                        .child(icon_elem(IconName::ListMusic, 18.0, colors::MUTED)),
+                )
+                .child(dynamic(volume_icon))
+                .child(view().w(px(90.0)).child(audio_slider(
+                    || global::<Config>().get().volume,
+                    |new_volume| {
+                        let volume = new_volume.clamp(0.0, 1.0);
+                        if let Some(sender) = global::<AudioPlayer>().get_untracked().sender {
+                            let _ = sender.send(AudioCommand::SetVolume(volume));
+                        }
+                        global::<Config>().update(|config| config.volume = volume);
+                        save_config(&global::<Config>().get_untracked());
+                        crate::update_media_controls_volume(volume as f64);
+                    },
+                ))),
+        )
+}
+
+fn track_info() -> impl IntoElement {
+    let player = global::<AudioPlayer>().get();
+    let shorten = global::<Config>().get().shorten_titles;
+    let (title, subtitle) = player
+        .current_track
+        .map(|track| {
+            let title = track.display_title(shorten);
+            let subtitle = if track.album.is_empty() || track.album == track.title {
+                track.artist
+            } else {
+                format!("{} • {}", track.artist, track.album)
+            };
+            (title, subtitle)
+        })
+        .unwrap_or_else(|| ("No track playing".to_string(), String::new()));
+
+    view()
+        .flex_row()
+        .items_center()
+        .w(px(260.0))
+        .gap(px(12.0))
+        .child(cover_art(52.0))
+        .child(
+            view()
+                .flex_1()
+                .gap(px(2.0))
+                .child(
+                    text(title)
+                        .number_of_lines(1)
+                        .text_size(px(14.0))
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(colors::TEXT),
+                )
+                .child(
+                    text(subtitle)
+                        .number_of_lines(1)
+                        .text_size(px(12.0))
+                        .text_color(colors::MUTED),
+                ),
+        )
+}
+
+fn playback_controls() -> impl IntoElement {
+    let player = global::<AudioPlayer>().get();
+    let queue = global::<QueueManager>().get();
+    let repeat_icon = match queue.repeat_mode {
+        RepeatMode::Off => IconName::RepeatOff,
+        RepeatMode::Context => IconName::Repeat,
+        RepeatMode::Track => IconName::Repeat1,
+    };
+
+    view()
+        .flex_row()
+        .items_center()
+        .gap(px(12.0))
+        .child(
+            button()
+                .size(px(32.0))
+                .items_center()
+                .justify_center()
+                .rounded(px(16.0))
+                .pressable()
+                .accessibility_label("Previous track")
+                .on_press(play_prev)
+                .child(icon_elem(IconName::SkipBack, 18.0, colors::TEXT)),
+        )
+        .child(
+            button()
+                .size(px(38.0))
+                .items_center()
+                .justify_center()
+                .rounded(px(19.0))
+                .pressable()
+                .bg(colors::ACCENT_FILL)
+                .finish(Finish::Accent)
+                .accessibility_label(if player.is_playing { "Pause" } else { "Play" })
+                .on_press(toggle_play)
+                .child(icon_elem(
+                    if player.is_playing {
+                        IconName::Pause
+                    } else {
+                        IconName::Play
+                    },
+                    18.0,
+                    colors::ON_ACCENT,
+                )),
+        )
+        .child(
+            button()
+                .size(px(32.0))
+                .items_center()
+                .justify_center()
+                .rounded(px(16.0))
+                .pressable()
+                .accessibility_label("Next track")
+                .on_press(play_next)
+                .child(icon_elem(IconName::SkipForward, 18.0, colors::TEXT)),
+        )
+        .child(
+            button()
+                .size(px(32.0))
+                .items_center()
+                .justify_center()
+                .rounded(px(16.0))
+                .pressable()
+                .accessibility_label("Repeat")
+                .on_press(toggle_repeat)
+                .child(icon_elem(
+                    repeat_icon,
+                    16.0,
+                    if queue.repeat_mode == RepeatMode::Off {
+                        colors::MUTED
+                    } else {
+                        colors::ACCENT
+                    },
+                )),
+        )
+}
+
+fn volume_icon() -> impl IntoElement {
+    let volume = global::<Config>().get().volume;
+    view()
+        .child(icon_elem(
+            if volume <= 0.01 {
+                IconName::VolumeX
+            } else {
+                IconName::Volume
+            },
+            18.0,
+            colors::MUTED,
+        ))
+        .child(
+            text(format!("{:.0}%", volume * 100.0))
+                .w(px(34.0))
+                .text_size(px(11.0))
+                .text_color(colors::MUTED),
+        )
 }

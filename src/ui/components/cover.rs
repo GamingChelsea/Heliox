@@ -1,37 +1,18 @@
-use gpui_kit::{
-    App, ElementId, ObjectFit, Pixels, assets::IconName, base::h_flex, component::ActiveTheme,
-    img, prelude::*, px,
+use crate::ui::{
+    icons::{IconName, icon_elem},
+    theme::colors,
 };
+use nsh_core::prelude::*;
 
-pub fn cover_art(cx: &App) -> impl IntoElement {
-    cover_art_sized("cover-art", px(56.), cx)
-}
-
-pub fn cover_art_sized(id: impl Into<ElementId>, size: Pixels, cx: &App) -> impl IntoElement {
-    img("TODO.svg")
-        .id(id)
-        .size(size)
-        .flex_shrink_0()
-        .rounded(cx.theme().radius)
+pub fn cover_art(size_pt: f32) -> impl IntoElement {
+    view()
+        .size(px(size_pt))
+        .rounded(px(size_pt * 0.16))
+        .bg(colors::INSET)
         .border_1()
-        .border_color(cx.theme().border)
-        .bg(cx.theme().muted)
+        .border_color(colors::BORDER)
+        .items_center()
+        .justify_center()
         .overflow_hidden()
-        .object_fit(ObjectFit::Contain)
-        .with_loading(|| {
-            h_flex()
-                .size_full()
-                .justify_center()
-                .items_center()
-                .child(IconName::Loader)
-                .into_any_element()
-        })
-        .with_fallback(|| {
-            h_flex()
-                .size_full()
-                .justify_center()
-                .items_center()
-                .child(IconName::Music)
-                .into_any_element()
-        })
+        .child(icon_elem(IconName::Music, size_pt * 0.5, colors::MUTED))
 }
